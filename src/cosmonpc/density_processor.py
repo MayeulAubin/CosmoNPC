@@ -57,7 +57,7 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
         data = spec["array"]
         if not isinstance(data, np.ndarray) or data.shape != tuple(nmesh):
             raise ValueError("In-memory fields must be global arrays with shape nmesh on every rank")
-        if data.dtype.kind not in "fiu":
+        if data.dtype.kind not in "bfiu":
             raise TypeError("Density values must be real numeric scalars")
         out[...] = data[slices]
     else:
@@ -95,7 +95,7 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
                 dataset = hf[spec.get("dataset", "/scalars/field")]
                 if dataset.shape != tuple(counts) or int(meta("rank")) not in (0, 1):
                     raise ValueError(f"Expected a 3D scalar Field in {path}")
-                if dataset.dtype.kind not in "fiu":
+                if dataset.dtype.kind not in "bfiu":
                     raise TypeError(f"Expected real numeric density values in {path}")
                 time_key = "/info/scalars/time"
                 if time_key in hf.attrs:

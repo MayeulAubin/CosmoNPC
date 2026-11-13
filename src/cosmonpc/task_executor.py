@@ -347,6 +347,9 @@ def run_stats(config):
     if "density_split" in config:
         from .density_split import run_density_split
         return run_density_split(config, comm)
+    if config.get("input_type") == "density" and config.get("geometry") == "survey-like":
+        from .survey_field import run_survey_field_statistics
+        return run_survey_field_statistics(config,comm)
     # check the configuration and create output directory
     config = dict(config)
     validate_config(config)

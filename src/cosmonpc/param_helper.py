@@ -160,8 +160,12 @@ def validate_config(config):
     if input_type not in ("catalog", "density"):
         raise ValueError("input_type must be 'catalog' or 'density'")
     if input_type == "density":
-        if config.get("geometry") != "box-like":
-            raise ValueError("Density inputs currently require box-like geometry")
+        if config.get("geometry") not in ("box-like", "survey-like"):
+            raise ValueError("Density inputs require box-like or survey-like geometry")
+        if config.get("geometry") == "survey-like":
+            supplied = sum(config.get(key) is not None for key in ("survey_weight", "survey_randoms"))
+            if supplied != 1:
+                raise ValueError("Survey fields require exactly one of survey_weight or survey_randoms")
         if config.get("statistic") not in ("pk", "bk_sugi"):
             raise ValueError("Density inputs support pk and bk_sugi")
         if config.get("apply_rsd", False):

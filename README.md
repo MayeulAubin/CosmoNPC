@@ -18,8 +18,12 @@ storage by half; accuracy depends on the signal and cancellation between terms.
 
 ## Density inputs
 
-Density inputs currently support periodic boxes (`pk` and `bk_sugi`, auto and
-cross, including all supported bispectrum tracer combinations).
+Density inputs support periodic boxes and gridded surveys (`pk` and `bk_sugi`,
+auto and cross, including all supported bispectrum tracer combinations).
+For `geometry="survey-like"`, supply `survey_weight` (a same-grid field in [0,1])
+or `survey_randoms`, and use mesh normalization. [Survey-field examples and
+normalization](docs/density_split.md#step-5-gridded-survey-fields-tile-coverage-and-survey-weights)
+cover incomplete sCOLA tiles and physical cell coordinates.
 Use `input_type="density"` and provide `fields` instead of `catalogs`:
 
 ```python
@@ -154,7 +158,9 @@ output modes.
 Add `density_split` to a normal configuration to measure quantile auto/cross
 power multipoles or ordered Sugiyama bispectra. Box catalogue and density-field
 inputs share uniform mesh queries. Survey catalogues use random-catalogue
-queries and the existing survey estimators. Defaults are five quantiles and
+queries; gridded surveys use selection-weighted cells with an explicit weight
+field or random-derived window. Both reuse the existing survey estimators.
+Defaults are five quantiles and
 Gaussian smoothing of radius 10 in `boxsize` units.
 
 ```python
@@ -169,7 +175,8 @@ config["density_split"] = {
 result = run_stats(config)
 ```
 
-Survey cross measurements require `normalization_scheme="mixed-mesh"`.
+Catalogue survey cross measurements require `normalization_scheme="mixed-mesh"`;
+gridded surveys use `normalization_scheme="mesh"`.
 [Definitions, step-by-step implementation, survey random-pool treatment,
 examples, and validation](docs/density_split.md) explain the estimator choices
 and the distinction between box and survey queries.

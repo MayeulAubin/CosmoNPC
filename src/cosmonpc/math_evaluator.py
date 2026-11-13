@@ -26,7 +26,15 @@ def get_kgrid(cfield):
     return normalized_kgrid, knorm
 
 
-def get_xgrid(rfield, boxcenter, boxsize, nmesh):
+def get_xgrid(rfield, boxcenter, boxsize, nmesh, origin=None):
+    if origin is not None:
+        # File grids have monotonic physical cell coordinates, whereas pmesh.x
+        # wraps the second half of each axis into negative coordinates.
+        cell = np.asarray(boxsize)/np.asarray(nmesh)
+        axes = np.ogrid[tuple(slice(int(a),int(a+b)) for a,b in zip(rfield.start,rfield.shape))]
+        xgrid = [np.asarray(origin)[i]+(axes[i]+.5)*cell[i] for i in range(3)]
+        norm = np.sqrt(sum(x*x for x in xgrid))
+        return [np.divide(x,norm,out=np.zeros_like(norm),where=norm!=0) for x in xgrid]
     off_set = 0.5 * boxsize / nmesh + boxcenter
     xgrid = [np.real(rfield.x[i]) + off_set[i] for i in range(3)]
     xnorm = np.sqrt(sum(xx**2 for xx in xgrid))

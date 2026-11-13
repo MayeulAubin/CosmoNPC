@@ -13,7 +13,7 @@ from .quantiles import global_cell_ids, gaussian_smooth, assign_quantiles, quant
 from .clustering_estimator import calculate_power_spectrum_box, calculate_bk_sugi_box
 
 
-def _configuration(config):
+def _configuration(config, require_quantile=True):
     base = dict(config)
     options = base.pop('density_split')
     if not isinstance(options, dict):
@@ -42,19 +42,18 @@ def _configuration(config):
     if base['geometry'] == 'survey-like':
         base.setdefault('z_range', None)
         base.setdefault('comp_weight_plan', {'scheme':None, 'name_alias':None})
-        base.setdefault('normalization_scheme', 'mixed-mesh')
+        base.setdefault('normalization_scheme', 'mesh' if base['input_type'] == 'density' else 'mixed-mesh')
         base.setdefault('alpha_scheme', 'pypower')
         if base['alpha_scheme'] not in ('pypower','nbodykit'):
             raise ValueError('alpha_scheme must be pypower or nbodykit')
-        supported = ('particle','mixed-mesh') if base['statistic'] == 'pk' else ('particle','mesh','mixed-mesh')
+        supported = (('mesh',) if base['input_type'] == 'density' else
+                     ('particle','mixed-mesh') if base['statistic'] == 'pk' else ('particle','mesh','mixed-mesh'))
         if base['normalization_scheme'] not in supported:
             raise ValueError(f'normalization_scheme must be one of {supported}')
     # In density-split mode the measurement legs determine auto/cross and
     # bispectrum ordering; these ordinary task flags do not select input legs.
     base['correlation_mode'] = 'auto'
     base['tracer_type'] = 'aaa'
-    if base['geometry'] == 'survey-like' and base['input_type'] != 'catalog':
-        raise ValueError('Survey density-split requires catalogue inputs and randoms; density fields use box-like geometry')
     validate_config(base)
     if base['statistic'] == 'pk':
         validate_poles(base['poles'])
@@ -92,10 +91,10 @@ def _configuration(config):
     defaults = ([['Q', options['source']], ['Q', 'Q']] if base['statistic'] == 'pk' else
                 [['Q', options['source'], options['source']], ['Q', 'Q', options['source']], ['Q', 'Q', 'Q']])
     templates = options.get('measurements', defaults)
-    measurements = _expand_measurements(templates, count, sources, 2 if base['statistic'] == 'pk' else 3)
+    measurements = _expand_measurements(templates, count, sources, 2 if base['statistic'] == 'pk' else 3,require_quantile)
     used = {options['source']} | {token for legs in measurements for token in legs if not token.startswith('Q')}
     sources = {name: source for name, source in sources.items() if name in used}
-    if base['geometry'] == 'survey-like':
+    if base['geometry'] == 'survey-like' and base['input_type'] == 'catalog':
         for name in sources:
             if base['catalogs'].get(name.replace('data_', 'randoms_')) is None:
                 raise ValueError(f'Survey density-split requires randoms for {name}')
@@ -115,7 +114,7 @@ def _configuration(config):
     return base, options, sources, measurements
 
 
-def _expand_measurements(templates, count, sources, legs):
+def _expand_measurements(templates, count, sources, legs, require_quantile=True):
     if not isinstance(templates, (list, tuple)) or not templates:
         raise ValueError('measurements must be a nonempty list of leg lists')
     allowed = set(sources) | {f'Q{i}' for i in range(count)} | {'Q'}
@@ -125,7 +124,7 @@ def _expand_measurements(templates, count, sources, legs):
             raise ValueError(f'Each measurement requires exactly {legs} legs')
         if any(not isinstance(token, str) or token not in allowed for token in template):
             raise ValueError(f'Invalid measurement leg: {template}; use Q, Q0..Q{count-1}, or input names')
-        if not any(token.startswith('Q') for token in template):
+        if require_quantile and not any(token.startswith('Q') for token in template):
             raise ValueError('A density-split measurement must contain a quantile leg')
         for q in range(count) if 'Q' in template else [None]:
             entry = tuple(f'Q{q}' if token == 'Q' else token for token in template)
@@ -140,21 +139,12 @@ def _collective_error(error, comm):
         raise ValueError(next(e for e in errors if e))
 
 
-def prepare_density_split(config, comm=MPI.COMM_WORLD):
-    """Load tracers and build quantile labels without running any statistic.
-
-    Returns local pmesh tracers, labels, quantile metadata, source metadata,
-    validated ordinary settings, split settings, and ordered measurement legs.
-    No user-supplied overdensity is centered or otherwise renormalized.
-    """
-    base, options, sources, measurements = _configuration(config)
-    if base['geometry'] != 'box-like':
-        raise ValueError('Use prepare_survey_density_split for survey inputs')
+def _read_mesh_tracers(base, options, sources, comm):
     pm = ParticleMesh(Nmesh=base['nmesh'], BoxSize=base['boxsize'],
                       dtype=complex_dtype(base['precision']), comm=comm)
     template = pm.create(type='real')
     mask = np.ones(template.shape, dtype=bool)
-    tracers, specs, metadata = {}, {}, {}
+    tracers, specs = {}, {}
     for name, source in sources.items():
         error = None
         if base['input_type'] == 'density':
@@ -196,6 +186,11 @@ def prepare_density_split(config, comm=MPI.COMM_WORLD):
         except Exception as exc:
             error = f'Invalid density-split mask: {exc}'
         _collective_error(error, comm)
+    return tracers, specs, mask, next(iter(tracers.values()))
+
+
+def _normalize_mesh_tracers(tracers, specs, mask, base, comm):
+    metadata = {}
     covered = comm.allreduce(int(mask.sum()), op=MPI.SUM)
     if not covered:
         raise ValueError('Density-split mask has no covered cells')
@@ -223,6 +218,22 @@ def prepare_density_split(config, comm=MPI.COMM_WORLD):
         field.value[~mask] = 0
         metadata[name] = {'kind':spec['kind'], 'input_mean_covered':mean,
                           'mean_density':reference, 'assignment_compensation':base['compensation']}
+    return metadata
+
+
+def prepare_density_split(config, comm=MPI.COMM_WORLD):
+    """Load tracers and build quantile labels without running any statistic.
+
+    Returns local pmesh tracers, labels, quantile metadata, source metadata,
+    validated ordinary settings, split settings, and ordered measurement legs.
+    No user-supplied overdensity is centered or otherwise renormalized.
+    """
+    base, options, sources, measurements = _configuration(config)
+    if base['geometry'] != 'box-like':
+        raise ValueError('Use prepare_survey_density_split for survey inputs')
+    tracers, specs, mask, template = _read_mesh_tracers(base, options, sources, comm)
+    metadata = _normalize_mesh_tracers(tracers, specs, mask, base, comm)
+    covered = comm.allreduce(int(mask.sum()), op=MPI.SUM)
     environment = gaussian_smooth(tracers[options['source']], options['smoothing_radius'], mask)
     ids = global_cell_ids(template.shape, template.start, base['nmesh'])
     labels, info = assign_quantiles(environment, mask, ids, options['nquantiles'], comm, options['tie_seed'])
@@ -233,6 +244,9 @@ def prepare_density_split(config, comm=MPI.COMM_WORLD):
 
 
 def run_density_split(config, comm=MPI.COMM_WORLD):
+    if config.get('geometry') == 'survey-like' and config.get('input_type') == 'density':
+        from .survey_field import run_survey_field_statistics
+        return run_survey_field_statistics(config,comm)
     if config.get('geometry') == 'survey-like':
         from .survey_density_split import run_survey_density_split
         return run_survey_density_split(config, comm)

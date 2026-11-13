@@ -41,9 +41,9 @@ discarded. The linear dependence is exposed through the partition identity;
 users may choose which quantiles to include in later inference.
 
 The box workflow supports periodic and zero-filled masked boxes with all current
-field and catalogue input formats. The survey workflow (Step 4) uses the current
-catalogue/random interface. As in ordinary runs, gridded field inputs currently
-require box-like geometry. A masked box is not a survey estimator.
+field and catalogue input formats. The catalogue survey workflow (Step 4) uses the existing catalogue/random
+interface. Gridded survey fields use an explicit survey weight or random
+catalogue (Step 5). A masked box is not a survey estimator.
 
 ## Step 2: box tracer loading and power multipoles
 
@@ -162,10 +162,9 @@ cosmological model for density-selected bispectra.
 Survey runs use the same catalogue inputs as ordinary CosmoNPC survey runs:
 FITS files with the existing redshift/column/completeness configuration, or
 preprocessed structured NumPy catalogues with local rows on each MPI rank.
-Each referenced `data_a`, `data_b`, or `data_c` requires its corresponding
-`randoms_a`, `randoms_b`, or `randoms_c`. Survey field inputs remain unsupported,
-matching the ordinary pipeline; a zero-filled density field uses the masked-box
-path instead.
+Each referenced catalogue `data_a`, `data_b`, or `data_c` requires its
+corresponding `randoms_a`, `randoms_b`, or `randoms_c`. Gridded density fields
+use the separate survey-field adapter in Step 5.
 
 ```python
 from copy import deepcopy
@@ -257,6 +256,113 @@ noise induced by estimating an environment from a finite galaxy sample.
 Survey window effects and the need for appropriate modelling/mocks remain as
 in ordinary survey measurements.
 
+## Step 5: gridded survey fields, tile coverage, and survey weights
+
+Gridded surveys support both ordinary statistics and density splits. Supply
+exactly one of these selections:
+
+- `survey_weight`: a global NumPy array on the same grid, or a Simbelmyne HDF5
+  Field descriptor with the same size, spacing, and origin. Values must be
+  finite and between 0 and 1. Boolean masks are accepted.
+- `survey_randoms`: a survey random catalogue. In-memory inputs can be local
+  `(N,3)` Cartesian positions, or structured arrays containing `Position` and
+  optional `WEIGHT` and `WEIGHT_FKP` (missing weights default to one).
+  Existing survey FITS reading is also supported with its usual column,
+  cosmology, completeness-weight, and redshift-cut settings.
+
+```python
+config = {
+    "input_type": "density", "geometry": "survey-like", "statistic": "pk",
+    "fields": {"data_a": {
+        "tiles": tile_paths, "kind": "overdensity", "missing_tiles": "zero",
+    }},
+    "survey_weight": survey_weight_array,  # same global grid, values in [0,1]
+    # Or omit survey_weight and set survey_randoms to a random catalogue.
+    "nmesh": [256, 256, 256], "boxsize": [2000., 2000., 2000.],
+    "field_origin": [-1000., -1000., -1000.],
+    "k_min": .005, "k_max": .15, "k_bins": 20,
+    "poles": [0, 2], "precision": "single", "normalization_scheme": "mesh",
+    "output_dir": "./survey_density_split",
+    "density_split": {
+        "nquantiles": 5, "smoothing_radius": 10.,
+        "measurements": [["Q", "data_a"], ["Q", "Q"]],
+    },
+}
+result = run_stats(config)
+```
+
+Adapt `field_origin` to the global grid's physical corner. It determines the
+observer-relative cell centers used for wide-angle multipoles; the observer
+is at `(0,0,0)`. The pmesh coordinate wrap in the second half of an axis must
+not be interpreted as the physical position of a file-grid cell.
+
+For bispectra set `statistic="bk_sugi"`, choose `angu_config` and diagonal/full
+mode, and give three-leg measurements as in Step 3. Removing `density_split`
+runs ordinary survey field power/bispectra; ordinary auto/cross and
+`tracer_type` settings then determine the legs. The continuous-field adapter
+uses mesh normalization, not particle normalization, and passes weighted fields
+to the existing survey angular estimators.
+
+### Coverage, selection, and queries
+
+The effective footprint is the intersection of available tiles, any explicit
+binary split mask, and positive survey selection. Missing tiles stay zero even
+if the survey weight is positive there. Existing zero-valued overdensities are
+valid field samples; they are not interpreted as missing cells. All input
+tracers in a measurement use the common valid footprint.
+
+Queries for gridded surveys are **selection-weighted mesh cells**. The environment
+is smoothed over valid coverage, then ranked by its selection-weighted
+cumulative distribution. Quantiles have approximately equal query weight,
+with errors limited by individual cell weights. Their cell counts need not be
+equal. Actual query-weight fractions are saved and used to define
+`delta_Q = indicator_Q / fraction_Q - 1`. This guarantees both a zero
+selection-weighted mean for each Q field and the pointwise partition identity
+`sum(fraction_Q delta_Q)=0`. A quantile containing no cells is rejected; refine
+the grid or request fewer quantiles. Uniform nonzero weights retain the
+unweighted rank convention from Step 1.
+
+When a random catalogue supplies the selection, completeness-weighted counts
+are painted onto physical file-grid cell centers to define query weights.
+Completeness times FKP weights define the measurement window (FKP defaults to
+one). Both are scaled by their global maxima; the arbitrary overall window
+scale cancels in the estimators. Random points outside the configured field
+box are discarded. The selection is a fixed rasterized window; finite-random
+sampling fluctuations in that window are retained.
+
+Consequently, catalogue surveys and gridded surveys target the same kind of
+environment selection but have different discrete queries: the former use
+random positions, the latter use weighted cells, including when randoms supply
+the window. They are not claimed to produce identical finite-resolution splits.
+For an identical mesh-query comparison, first paint the catalogue and use that
+mesh as the field input. Box catalogue and field inputs already share the same
+uniform cell queries.
+
+### Continuous field normalization
+
+The actual measurement legs are `F(x)=W(x) delta(x)`. Supplied overdensities
+are not renormalized or centered. Explicit counts inputs are converted once
+using the common covered-cell mean or supplied `mean_density`, as in Step 2.
+The survey adapter uses
+
+- `I2 = integral W(x)^2 dV` for power spectra;
+- `I3 = integral W(x)^3 dV` for the current Sugiyama bispectrum convention.
+
+Every leg shares this window. Scalar rescaling of W leaves the statistic
+unchanged. No particle catalogue is synthesized from the field, and no
+Poisson self terms are subtracted. Quantile indicators are continuous grid
+fields as well. Discreteness already present in a particle-derived DM density
+field is therefore retained rather than assigned an invented shot-noise model.
+The results remain window-convolved; this adapter does not deconvolve the
+survey window.
+
+Outputs record the selection integrals, coverage, query-weight fractions,
+physical origin, and `shotnoise_policy="continuous_fields_no_Poisson_subtraction"`.
+Ordinary field runs write `survey_field_pk.npy` / `survey_field_bk_sugi.npy`;
+split runs retain the `density_split_*` filenames. Both return a dictionary of
+ordered measurements on rank zero. See `config/density_split_fields_survey.py`
+for an editable configuration template.
+
 ## Validation and execution
 
 ```bash
@@ -270,7 +376,10 @@ legs, catalogue/field parity, masks, HDF5 tiles, both precisions, and unchanged
 input arrays. Survey checks compare generated catalogue measurements to the
 ordinary public pipeline, covering all five bispectrum tracer patterns, FITS
 versus preprocessed input, normalization modes, alpha schemes, interlacing,
-high-order power modes, and both shot-noise branches.
+high-order power modes, and both shot-noise branches. Gridded survey checks
+include independent physical wide-angle P0/P2 and B000/B202 contractions,
+selection-weighted CDF ranks, window-scale invariance, and incomplete HDF5
+tiles with array/HDF5 masks and random-catalogue windows.
 
 The development sandbox permits single-rank MPI but blocks the sockets needed
 for multi-rank execution. Multi-rank behavior is implemented using pmesh and MPI

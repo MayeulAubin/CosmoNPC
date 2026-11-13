@@ -372,7 +372,8 @@ def calculate_power_spectrum_survey(
         kgrid = None
     else:
         kgrid, knorm = get_kgrid(cfield_a)
-        xgrid = get_xgrid(rfield_a, boxcenter, boxsize, nmesh)
+        xgrid = get_xgrid(rfield_a, boxcenter, boxsize, nmesh,
+                          origin=stat_attrs.get("field_origin") if stat_attrs.get("input_type") == "density" else None)
 
     # No need to clear zero-mode in the Fourier space, see math_evaluator.get_Ylm for explanation
     results = {} if rank == 0 else None
@@ -1662,7 +1663,8 @@ def calculate_bk_sugi_survey(
         cfield_b[:] *= boxsize.prod()
 
     kgrid, knorm = get_kgrid(cfield_a)
-    xgrid = get_xgrid(rfield_a, boxcenter, boxsize, nmesh)
+    xgrid = get_xgrid(rfield_a, boxcenter, boxsize, nmesh,
+                          origin=stat_attrs.get("field_origin") if stat_attrs.get("input_type") == "density" else None)
 
     sub_count, sub_knorm_sum = get_kbin_count(k_bins, k_edge, knorm)
     k_num = comm.reduce(sub_count, op=MPI.SUM, root=0)
