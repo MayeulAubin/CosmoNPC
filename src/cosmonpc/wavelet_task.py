@@ -166,10 +166,14 @@ def run_wavelet(config, comm=MPI.COMM_WORLD):
         if comm.rank==0:
             output['measurements'][name] = result
         del field,mask,result
+    error = None
     if comm.rank==0:
-        os.makedirs(base['output_dir'],exist_ok=True)
-        path = os.path.join(base['output_dir'],'wst.npy')
-        np.save(path,output)
-        logging.info('WST saved to %s',path)
-    comm.Barrier()
+        try:
+            os.makedirs(base['output_dir'],exist_ok=True)
+            path = os.path.join(base['output_dir'],'wst.npy')
+            np.save(path,output)
+            logging.info('WST saved to %s',path)
+        except Exception as exc:
+            error = f'Cannot save WST output: {exc}'
+    _collective_error(error,comm)
     return output if comm.rank==0 else None

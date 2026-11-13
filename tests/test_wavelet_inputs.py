@@ -143,6 +143,13 @@ class WaveletInputTests(unittest.TestCase):
                 with self.assertRaises((ValueError,AssertionError)):
                     run_stats(config(tmp,**extra))
 
+    def test_root_output_failure_is_collective(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            file=Path(tmp)/'file_not_directory'
+            file.write_text('existing file')
+            with self.assertRaisesRegex(ValueError,'Cannot save WST output'):
+                run_stats(config(tmp,output_dir=str(file),wst={'J':0,'L':0}))
+
 
 if __name__=='__main__':
     unittest.main()
