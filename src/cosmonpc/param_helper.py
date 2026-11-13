@@ -181,6 +181,10 @@ def validate_config(config):
         if config.get("correlation_mode") not in ("auto", "cross"):
             raise ValueError("correlation_mode must be 'auto' or 'cross'")
         labels = ["a"] + (["b"] if config["correlation_mode"] == "cross" else [])
+        if config.get("statistic") == "wst":
+            # The WST task validates its explicitly selected independent source
+            # names; auto/cross leg labels do not select sources for this task.
+            labels = []
         if config.get("statistic") == "bk_sugi":
             validate_tracer(config["tracer_type"], config["correlation_mode"])
             if config["tracer_type"] == "abc":

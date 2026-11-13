@@ -75,6 +75,10 @@ class WaveletInputTests(unittest.TestCase):
                 for key in ['S0','S1','S2']:
                     np.testing.assert_allclose(r['measurements']['data_b'][key],r['measurements']['data_a'][key]*2**np.array(OPTIONS['q']),rtol=1e-12)
                 self.assertTrue((Path(tmp)/'wst.npy').exists())
+            only_b=run_stats(config(tmp,fields={'data_b':DELTA},wst={**OPTIONS,'sources':['data_b']}))
+            if COMM.rank==0:
+                self.assertEqual(set(only_b['measurements']),{'data_b'})
+                np.testing.assert_allclose(only_b['measurements']['data_b']['S1'],r['measurements']['data_a']['S1'])
 
     def test_hdf5_full_and_missing_tiles(self):
         with tempfile.TemporaryDirectory() as tmp:
