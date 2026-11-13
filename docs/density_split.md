@@ -116,3 +116,40 @@ This policy does **not** claim that particle noise is absent. Quantile auto
 statistics also contain mesh-sampling/discretization effects. Masked-box
 measurements retain full-box normalization and are window-convolved; they are
 not survey estimators. Treat these choices consistently in modelling and mocks.
+
+## Step 3: ordered Sugiyama bispectrum legs
+
+Use the same split settings and inputs, change `statistic` to `"bk_sugi"`, and
+specify three legs per measurement:
+
+```python
+config["statistic"] = "bk_sugi"
+config["angu_config"] = [0, 0, 0]  # e.g. [2, 0, 2] for an angular multipole
+config["data_vector_mode"] = "full"  # or "diagonal"
+config["density_split"]["measurements"] = [
+    ["Q", "data_a", "data_a"],  # Qgg
+    ["Q", "Q", "data_a"],       # QQg
+    ["Q", "Q", "Q"],            # QQQ
+    ["Q0", "Q4", "data_a"],     # a particular ordered cross-quantile triple
+]
+result = run_stats(config)
+```
+
+These three repeated-Q templates are the defaults for bispectra. Leg order is
+preserved: `["Q0", "data_a", "data_a"]`, `["data_a", "Q0", "data_a"]`, and
+`["data_a", "data_a", "Q0"]` need not produce the same angular statistic.
+Require `2*k_max` below Nyquist, as in the existing Sugiyama workflow.
+
+The calculation calls the existing `calculate_bk_sugi_box` general three-field
+path, with independent copies even for repeated tokens. This avoids compounding
+the estimator's in-place rescaling or applying inappropriate repeated-catalogue
+shot-noise contractions to quantile indicator meshes. The existing binning,
+block size, angular coupling, normalization, and diagonal/full output convention
+are retained. Output is `density_split_bk_sugi.npy`, with `B_sugi`, `Bk_raw`,
+mode counts, and shot-noise metadata for each ordered combination.
+
+Tests compare six ordered combinations in diagonal/full modes against direct
+NumPy Fourier contractions for angular configurations `[0,0,0]` and `[2,0,2]`.
+They also check catalogue/count-field parity, both precisions, and repeat-call
+invariance. These are numerical estimator checks, not a validation of a
+cosmological model for density-selected bispectra.

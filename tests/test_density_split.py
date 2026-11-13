@@ -125,6 +125,76 @@ class DensitySplitTests(unittest.TestCase):
                 expected = power_oracle(qs[0],(SIGNAL+.3)*fullmask,c)
                 np.testing.assert_allclose(tile['measurements']['Q0__data_a']['P0'],expected['P0'],atol=1e-9)
 
+    def test_bispectrum_ordered_legs_and_multipoles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            quantiles = reference_quantiles(SIGNAL, np.ones(SIGNAL.shape,dtype=bool),count=3)
+            registry = {f'Q{i}':q for i,q in enumerate(quantiles)}
+            registry['data_a'] = SIGNAL
+            pairs = [['Q0','data_a','data_a'],['data_a','Q0','data_a'],
+                     ['data_a','data_a','Q0'],['Q1','Q1','data_a'],
+                     ['Q2','Q2','Q2'],['Q0','Q1','data_a']]
+            k = 2*np.pi*np.fft.fftfreq(N,d=L/N)
+            grid = np.meshgrid(k,k,k,indexing='ij')
+            norm = np.sqrt(sum(x*x for x in grid))
+            mu = np.divide(grid[2],norm,out=np.zeros_like(norm),where=norm!=0)
+            edges = np.linspace(.04,.19,3)
+            masks = [(norm>=lo)&(norm<hi) for lo,hi in zip(edges[:-1],edges[1:])]
+            for angular in [[0,0,0],[2,0,2]]:
+                weight = np.ones_like(norm) if angular == [0,0,0] else .5*(3*mu**2-1)
+                amplitude = 1 if angular == [0,0,0] else 5
+                for mode in ['full','diagonal']:
+                    c = configuration(tmp,statistic='bk_sugi',angu_config=angular,
+                        data_vector_mode=mode,density_split={'nquantiles':3,'smoothing_radius':7.,'measurements':pairs})
+                    result = run_stats(c)
+                    if COMM.rank != 0:
+                        continue
+                    for legs in pairs:
+                        a,b,d = [registry[token] for token in legs]
+                        first = [np.fft.ifftn(np.fft.fftn(a)*mask*weight).real for mask in masks]
+                        second = [np.fft.ifftn(np.fft.fftn(b)*mask).real for mask in masks]
+                        expected = np.array([[amplitude*L**6*np.mean(x*y*d)/(masks[i].sum()*masks[j].sum())
+                                               for j,y in enumerate(second)] for i,x in enumerate(first)])
+                        if mode == 'diagonal':
+                            expected = expected.diagonal()
+                        measured = result['measurements']['__'.join(legs)]
+                        np.testing.assert_allclose(measured['B_sugi'],expected,rtol=2e-10,atol=2e-6)
+                        self.assertEqual(measured['Shot_noise'],0.)
+                    self.assertTrue((Path(tmp)/'density_split_bk_sugi.npy').is_file())
+            # Repeated calls cannot compound the estimator's in-place scaling.
+            first = run_stats(c)
+            second = run_stats(c)
+            if COMM.rank == 0:
+                for key in first['measurements']:
+                    np.testing.assert_array_equal(first['measurements'][key]['B_sugi'],second['measurements'][key]['B_sugi'])
+
+    def test_bispectrum_catalogue_parity_and_precision(self):
+        ids = np.arange(N**3)
+        data = np.empty(N**3,dtype=[('Position','f8',(3,)),('WEIGHT','f8')])
+        data['Position'] = np.moveaxis(XYZ,0,-1).reshape(-1,3)*L/N
+        data['WEIGHT'] = (1+SIGNAL).ravel()
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = {'nquantiles':3,'smoothing_radius':7.,
+                        'measurements':[['Q','data_a','data_a'],['Q','Q','data_a'],['Q','Q','Q']]}
+            outputs = []
+            for precision in ['double','single']:
+                c = configuration(Path(tmp)/precision,statistic='bk_sugi',angu_config=[0,0,0],
+                                  data_vector_mode='full',precision=precision,density_split=settings)
+                field = run_stats(c)
+                cat = run_stats({**c,'input_type':'catalog','sampler':'ngp',
+                                 'catalogs':{'data_a':data[ids%COMM.size == COMM.rank]}})
+                if COMM.rank == 0:
+                    outputs.append(field)
+                    self.assertEqual(len(field['measurements']),9)
+                    for key in field['measurements']:
+                        np.testing.assert_allclose(cat['measurements'][key]['B_sugi'],field['measurements'][key]['B_sugi'],rtol=2e-5,atol=3.)
+                        dtype = np.complex64 if precision == 'single' else np.complex128
+                        self.assertEqual(field['measurements'][key]['Bk_raw'].dtype,dtype)
+            if COMM.rank == 0:
+                for key in outputs[0]['measurements']:
+                    expected = outputs[0]['measurements'][key]['B_sugi']
+                    np.testing.assert_allclose(outputs[1]['measurements'][key]['B_sugi'],expected,
+                                               rtol=2e-5,atol=np.max(abs(expected))*2e-6)
+
     def test_selected_source_cross_quantiles_and_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             c = configuration(tmp,fields={'data_a':SIGNAL,'data_b':-SIGNAL},density_split={

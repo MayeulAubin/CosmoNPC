@@ -10,7 +10,7 @@ from .density_processor import read_local_field
 from .mesh_generator import get_mesh_box
 from .math_evaluator import get_compensation_bk_sugi
 from .quantiles import global_cell_ids, gaussian_smooth, assign_quantiles, quantile_field
-from .clustering_estimator import calculate_power_spectrum_box
+from .clustering_estimator import calculate_power_spectrum_box, calculate_bk_sugi_box
 
 
 def _configuration(config):
@@ -25,8 +25,8 @@ def _configuration(config):
         raise ValueError(f'Unknown density_split options: {sorted(unknown)}')
     if base.get('geometry', 'box-like') != 'box-like':
         raise ValueError('Density-split currently supports periodic/masked boxes, not survey estimators')
-    if base.get('statistic') != 'pk':
-        raise ValueError('Density-split currently requires statistic=pk')
+    if base.get('statistic') not in ('pk', 'bk_sugi'):
+        raise ValueError('Density-split statistic must be pk or bk_sugi')
     base.setdefault('geometry', 'box-like')
     base.setdefault('input_type', 'catalog')
     base.setdefault('sampler', 'cic')
@@ -54,8 +54,9 @@ def _configuration(config):
     if isinstance(bins, (bool, np.bool_)) or not isinstance(bins, (int, np.integer)) or bins < 1:
         raise ValueError('k_bins must be a positive integer')
     nyquist = np.pi * base['nmesh'][0] / base['boxsize'][0]
-    if kmax >= nyquist:
-        raise ValueError('k_max must be below Nyquist for pk')
+    factor = 2 if base['statistic'] == 'bk_sugi' else 1
+    if factor*kmax >= nyquist:
+        raise ValueError(f'{factor} * k_max must be below Nyquist for {base["statistic"]}')
     options.setdefault('source', 'data_a')
     options.setdefault('nquantiles', 5)
     options.setdefault('smoothing_radius', 10.)
@@ -72,8 +73,10 @@ def _configuration(config):
         raise ValueError('density_split.source must name an available data_a, data_b, or data_c')
     if base['input_type'] == 'catalog':
         catalog_check(base['catalogs'], 'box-like', 'auto', base['statistic'])
-    templates = options.get('measurements', [['Q', options['source']], ['Q', 'Q']])
-    measurements = _expand_measurements(templates, count, sources, 2)
+    defaults = ([['Q', options['source']], ['Q', 'Q']] if base['statistic'] == 'pk' else
+                [['Q', options['source'], options['source']], ['Q', 'Q', options['source']], ['Q', 'Q', 'Q']])
+    templates = options.get('measurements', defaults)
+    measurements = _expand_measurements(templates, count, sources, 2 if base['statistic'] == 'pk' else 3)
     used = {options['source']} | {token for legs in measurements for token in legs if not token.startswith('Q')}
     sources = {name: source for name, source in sources.items() if name in used}
     return base, options, sources, measurements
@@ -204,7 +207,9 @@ def run_density_split(config, comm=MPI.COMM_WORLD):
               'k_min':base['k_min'], 'k_max':base['k_max'], 'k_bins':base['k_bins'],
               'shotnoise_policy':'none',
               'shotnoise_note':'No Poisson correction for nonlinear quantile selection; discreteness noise remains.',
-              'poles':base['poles'], 'field_origin':base.get('field_origin',[0.,0.,0.]),
+              'poles':base['poles'], 'angu_config':base['angu_config'],
+              'data_vector_mode':base.get('data_vector_mode','diagonal'),
+              'field_origin':base.get('field_origin',[0.,0.,0.]),
               'measurements':{}}
     for legs in measurements:
         fields = []
@@ -218,9 +223,15 @@ def run_density_split(config, comm=MPI.COMM_WORLD):
         attrs = {**base, 'input_type':'density', 'compensation':False, 'interlaced':False}
         for label in ('a', 'b', 'c'):
             attrs[f'NZ_{label}'], attrs[f'N_gal_{label}'] = cells/volume, cells
-        mode = 'auto' if legs[0] == legs[1] else 'cross'
-        result = calculate_power_spectrum_box(fields[0], fields[1] if mode == 'cross' else None,
-                                               mode, attrs, comm)
+        if base['statistic'] == 'pk':
+            mode = 'auto' if legs[0] == legs[1] else 'cross'
+            result = calculate_power_spectrum_box(fields[0], fields[1] if mode == 'cross' else None,
+                                                   mode, attrs, comm)
+        else:
+            # Always use the general ordered three-field path. Even repeated
+            # tokens get independent meshes, since the estimator rescales inputs.
+            attrs['tracer_type'] = 'abc'
+            result = calculate_bk_sugi_box(*fields, 'cross', attrs, comm)
         if comm.rank == 0:
             result['legs'] = legs
             output['measurements']['__'.join(legs)] = result
