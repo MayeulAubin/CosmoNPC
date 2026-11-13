@@ -64,6 +64,32 @@ class QuantileTests(unittest.TestCase):
         np.testing.assert_array_equal(_permuted_ids(full,0),_permuted_ids(split,0))
         self.assertEqual(len(np.unique(_permuted_ids(full,0))),512)
 
+    def test_weighted_quantile_cdf_and_identity(self):
+        mesh=self.mesh()
+        ids=global_cell_ids(mesh.shape,mesh.start,[8]*3)
+        values=(ids%11).astype(float)
+        weights=(.2+.8*(ids%17)/16).astype(float)
+        mask=ids%5!=0
+        labels,info=assign_quantiles(values,mask,ids,3,COMM,tie_seed=12,weights=weights)
+        chosen=np.arange(8**3,dtype=np.uint64)
+        chosen=chosen[chosen%5!=0]
+        order=np.lexsort((_permuted_ids(chosen,12),chosen%11))
+        ranked=chosen[order]
+        w=.2+.8*(ranked%17)/16
+        cumulative=np.cumsum(w)
+        cuts=[0]+[np.searchsorted(cumulative,cumulative[-1]*q/3,side='left')+1 for q in [1,2]]+[len(ranked)]
+        expected=np.full(8**3,-1)
+        for q in range(3):
+            expected[ranked[cuts[q]:cuts[q+1]].astype(int)]=q
+        np.testing.assert_array_equal(labels,expected.reshape((8,)*3)[mesh.slices])
+        identity=np.zeros(mesh.shape)
+        for q,fraction in enumerate(info['fractions']):
+            delta=np.where(mask,(labels==q)/fraction-1.,0.)
+            self.assertAlmostEqual(COMM.allreduce(float(np.sum(weights*delta)),op=MPI.SUM),0.,places=10)
+            identity+=fraction*delta
+        np.testing.assert_allclose(identity,0,atol=3e-16)
+        self.assertLessEqual(np.ptp(info['query_weight_sums']),2*info['maximum_cell_weight'])
+
     def test_invalid_and_degenerate_environments(self):
         mesh=self.mesh()
         ids=global_cell_ids(mesh.shape,mesh.start,mesh.pm.Nmesh)
