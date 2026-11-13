@@ -1,6 +1,119 @@
 ![cnpc](./resources/cnpc.jpg)
 
-# CosmoNPC
+# CosmoCM
+
+CosmoCM is a fork of [CosmoNPC](https://github.com/YunchenXie/CosmoNPC),
+adding selectable mesh/FFT precision and periodic density-field inputs.
+The Python import remains `cosmonpc` for compatibility with existing scripts.
+The original MIT license and authorship are retained.
+
+## Precision
+
+Set `config["precision"] = "single"` for `complex64` meshes, FFTs, and
+bispectrum working arrays, or `"double"` (the default) for `complex128`.
+This applies to catalogue and density inputs, including survey auxiliary
+shot-noise meshes. Coordinates, normalization metadata, mode counts and some
+scalar/bin reductions retain double precision. Single precision reduces field
+storage by half; accuracy depends on the signal and cancellation between terms.
+
+## Density inputs
+
+Density inputs currently support periodic boxes (`pk` and `bk_sugi`, auto and
+cross, including all supported bispectrum tracer combinations).
+Use `input_type="density"` and provide `fields` instead of `catalogs`:
+
+```python
+import numpy as np
+from cosmonpc import run_stats
+
+config = {
+    "input_type": "density",
+    "fields": {"data_a": np.zeros((32, 32, 32), dtype=np.float32)},
+    "precision": "single",
+    "statistic": "pk",
+    "geometry": "box-like",
+    "correlation_mode": "auto",
+    "nmesh": [32, 32, 32],
+    "boxsize": [500., 500., 500.],
+    "k_min": 0.01, "k_max": 0.15, "k_bins": 10,
+    "poles": [0, 2], "rsd": [0, 0, 1],
+    "output_dir": "./results",
+}
+run_stats(config)
+```
+
+Each `fields["data_a"]` (or `data_b`, `data_c`) accepts:
+
+```python
+# Global NumPy overdensity array: delta = rho / mean(rho) - 1.
+source = delta
+source = {"array": delta, "kind": "delta", "name": "matter"}
+
+# Simbelmyne scalar Field HDF5, containing overdensity by default.
+source = "density_field.h5"
+source = {"path": "density_field.h5", "kind": "delta"}
+
+# Raw density or cell counts: normalize using the GLOBAL mean.
+source = {"path": "density_field.h5", "kind": "density"}
+source = {"array": rho, "kind": "density", "mean_density": 2.5}
+
+# sCOLA postprocessed tiles contain raw density: default kind is density.
+source = {"tiles": ["tile1_density_field.h5", "tile2_density_field.h5"]}
+```
+
+HDF5 reads use `/scalars/field` and root attributes `/info/scalars/N0..N2`,
+`L0..L2`, `corner0..corner2`, `rank` and optional `time`. Scalar ranks 0 and 1
+are accepted. Override the data path with `"dataset": "/another/path"`.
+Arrays must be real, finite, three-dimensional, and match `nmesh`.
+The HDF5 axis order must match `(N0, N1, N2)`; no implicit transpose is applied.
+Raw densities must be nonnegative and have a positive global mean.
+
+Tile order and filenames do not affect placement. Tile metadata must describe
+a complete, nonoverlapping, grid-aligned covering of the configured box, with
+the same cell spacing and cosmic time. Missing/overlapping tiles are errors;
+partial volumes are not silently zero padded. Buffered overlapping tiles must
+be cropped before use. `field_origin` defaults to `[0., 0., 0.]`; set it to the
+corner of a box with another origin. No regridding or periodic wrapping of
+out-of-box tiles is performed.
+
+For MPI, provide the same global NumPy array on every rank, or identical HDF5
+path descriptors on every rank. HDF5 files must be visible to all ranks. Each
+rank reads only the HDF5 regions intersecting its local pmesh domain; the full
+field is not assembled on rank zero. Tile density normalization uses the
+whole box, never an independent mean for each tile. Each tracer's DC component
+is removed. `mean_density` can supply an external positive reference density
+for raw density inputs; the remaining DC component is still removed.
+
+Continuous fields have zero Poisson shot-noise subtraction. Catalogue RSD and
+interlacing do not apply: set `apply_rsd=False` if adapting a catalogue config;
+interlacing is disabled for fields. Supply an already distorted density field
+for redshift-space measurements. Assignment-window compensation defaults to
+`False`; set `compensation=True` and the correct `sampler` only when the supplied
+field has that assignment window. Simbelmyne-specific higher-order assignment
+kernels are not inferred from the file.
+
+For bispectra, replace `statistic` with `"bk_sugi"`, add
+`"tracer_type": "aaa"`, `"angu_config": [0, 0, 0]`, and choose
+`"data_vector_mode": "diagonal"` or `"full"`. Ensure `2*k_max` is below the
+Nyquist frequency. For cross statistics, set `correlation_mode="cross"` and
+provide `data_b` (also `data_c` for `abc`). Catalogue/field mixing in one
+measurement is not currently supported.
+
+## Development checks
+
+With the dependencies installed:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+# Run the same numerical checks over multiple MPI domains:
+PYTHONPATH=src mpiexec -n 2 python -m unittest discover -s tests -v
+```
+
+The tests compare periodic power to an independent NumPy FFT, check precision,
+HDF5/tile equivalence, normalization, invalid inputs, and bispectrum tracer and
+output modes.
+
+## Upstream functionality
 
 CosmoNPC is a Python/MPI code for mesh-based measurements of large-scale structure statistics in box-like and survey-like geometries.
 
@@ -54,7 +167,7 @@ Example:
 ## Install
 
 ```bash
-pip install git+https://github.com/YunchenXie/CosmoNPC.git
+pip install -e .
 ```
 
 Core dependencies are listed in `pyproject.toml`. In practice you need at least:

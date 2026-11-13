@@ -1,7 +1,7 @@
 [project]
-name = "CosmoNPC"
-version = "0.2.0"
-description = "CosmoNPC is a Python/MPI code for mesh-based measurements of large-scale structure statistics"
+name = "CosmoCM"
+version = "0.3.0"
+description = "MPI mesh statistics for cosmological catalogues and density fields, based on CosmoNPC"
 readme = "README.md"
 authors = [
     { name = "Yunchen Xie", email = "xieyunchen20@mails.ucas.ac.cn" }
@@ -22,3 +22,6 @@ dependencies = [
 [build-system]
 requires = ["uv_build>=0.10.10,<0.11.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "cosmonpc"
