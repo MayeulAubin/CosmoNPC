@@ -2826,7 +2826,7 @@ def calculate_bk_sugi_survey(
         SN1 = np.zeros(k_bins, dtype=complex_type)
         SN2 = np.zeros(k_bins, dtype=complex_type)
         SN3 = np.zeros(k_bins, dtype=complex_type)
-        SN3_fft = None
+        SN3_fft = np.zeros_like(SN3) if shotnoise_mode == "both" else None
 
         if tracer_type == "abc":
             _log(1, "SHOT", "tracer_type=abc -> S0=S1=S2=S3=0.")
@@ -2961,7 +2961,7 @@ def calculate_bk_sugi_survey(
         SN1 = np.zeros((k_bins, k_bins), dtype=complex_type)
         SN2 = np.zeros((k_bins, k_bins), dtype=complex_type)
         SN3 = np.zeros((k_bins, k_bins), dtype=complex_type)
-        SN3_fft = None
+        SN3_fft = np.zeros_like(SN3) if shotnoise_mode == "both" else None
 
         if tracer_type == "abc":
             _log(1, "SHOT", "full mode: tracer_type=abc -> S0=S1=S2=S3=0.")
