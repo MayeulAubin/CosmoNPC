@@ -43,7 +43,9 @@ def calculate_bk_sco_box(rfield, stat_attrs, comm, **kwargs):
     # Calculate the Fourier transform of the density field
     cfield = rfield.r2c()
     # Compensate the cfield depending on the type of mesh
-    compensation = get_compensation(interlaced, sampler)
+    compensation = (identity_compensation() if stat_attrs.get("input_type") == "density"
+                    and not stat_attrs.get("compensation", False)
+                    else get_compensation(interlaced, sampler))
     cfield.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
     if rank == 0:
         logging.info(f"{compensation[0][1].__name__} applied to the density field")
@@ -334,7 +336,9 @@ def calculate_power_spectrum_survey(
     cfield_a = rfield_a.r2c()
 
     # Compensate the cfield depending on the type of mesh
-    compensation = get_compensation(interlaced, sampler)
+    compensation = (identity_compensation() if stat_attrs.get("input_type") == "density"
+                    and not stat_attrs.get("compensation", False)
+                    else get_compensation(interlaced, sampler))
     cfield_a.apply(out=Ellipsis, func=compensation[0][1], kind=compensation[0][2])
     cfield_a[
         :
@@ -578,7 +582,9 @@ def calculate_power_spectrum_box(
     )
     sampler, interlaced = stat_attrs["sampler"], stat_attrs["interlaced"]
     rsd = np.array(stat_attrs["rsd"])
-    P_shot = 1.0 / stat_attrs["NZ_a"] if correlation_mode == "auto" else 0.0
+    P_shot = (1.0 / stat_attrs["NZ_a"]
+              if correlation_mode == "auto" and stat_attrs.get("input_type", "catalog") == "catalog"
+              else 0.0)
 
     if correlation_mode == "cross":
         NZ_a = stat_attrs["NZ_a"]
@@ -596,7 +602,9 @@ def calculate_power_spectrum_box(
     comm.Barrier()
 
     # get the compensation mode
-    compensation = get_compensation(interlaced, sampler)
+    compensation = (identity_compensation() if stat_attrs.get("input_type") == "density"
+                    and not stat_attrs.get("compensation", False)
+                    else get_compensation(interlaced, sampler))
 
     # Calculate the Fourier transform of the density field and compensate it
     cfield_a = rfield_a.r2c()
@@ -798,19 +806,22 @@ def calculate_bk_sugi_box(
         logging.info(f"Rank {rank}: S3 shot-noise mode = {shotnoise_mode}")
 
     # Get the compensation mode in k-space
-    compensation = get_compensation_bk_sugi(sampler)
+    compensation = (identity_compensation() if stat_attrs.get("input_type") == "density"
+                    and not stat_attrs.get("compensation", False)
+                    else get_compensation_bk_sugi(sampler))
     if rank == 0:
         logging.info(
             "In Sugiyama estimator, the interlacing technique is not supported currently.\
                       Falling back to non-interlaced mode."
         )
 
-    # Recover the density field to physical overdensity
-    rfield_a[:] = rfield_a[:] / vol_per_cell - NZ_a
+    # Catalogue meshes contain counts; continuous meshes already contain delta.
+    continuous = stat_attrs.get("input_type") == "density"
+    rfield_a[:] = rfield_a[:] / vol_per_cell - (0 if continuous else NZ_a)
     if correlation_mode == "cross":
-        rfield_b[:] = rfield_b[:] / vol_per_cell - NZ_b
+        rfield_b[:] = rfield_b[:] / vol_per_cell - (0 if continuous else NZ_b)
         if tracer_type == "abc":
-            rfield_c[:] = rfield_c[:] / vol_per_cell - NZ_c
+            rfield_c[:] = rfield_c[:] / vol_per_cell - (0 if continuous else NZ_c)
 
     # Calculate the Fourier transform of the density field and apply compensation
     cfield_a = rfield_a.r2c()
@@ -1384,11 +1395,12 @@ def calculate_bk_sugi_box(
         return comm.bcast(s3_local if rank == 0 else None, root=0)
 
     SN3_fft = None
-    if tracer_type == "abc":
+    if tracer_type == "abc" or stat_attrs.get("input_type") == "density":
         SN0, SN1, SN2, SN3 = 0.0, 0.0, 0.0, 0.0
+        SN3_fft = 0.0
         if rank == 0:
             logging.info(
-                "Tracer type 'abc' detected, shot-noise terms are all set to zero."
+                "Continuous fields or tracer type 'abc': shot-noise terms are all zero."
             )
     else:
         # SN0
@@ -1636,7 +1648,9 @@ def calculate_bk_sugi_survey(
         logging.info(f"[BK-SURVEY][INIT] k_edge={k_edge}")
 
     # Window-function compensation used by Sugiyama estimator in k-space.
-    compensation = get_compensation_bk_sugi(sampler)
+    compensation = (identity_compensation() if stat_attrs.get("input_type") == "density"
+                    and not stat_attrs.get("compensation", False)
+                    else get_compensation_bk_sugi(sampler))
     compensation_shot_sugi = get_compensation_shot_sugi(sampler)
 
     cfield_a = rfield_a.r2c()

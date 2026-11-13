@@ -156,6 +156,34 @@ def validate_boolean_fields(config):
 def validate_config(config):
     from .precision import complex_dtype
     complex_dtype(config.setdefault("precision", "double"))
+    input_type = config.setdefault("input_type", "catalog")
+    if input_type not in ("catalog", "density"):
+        raise ValueError("input_type must be 'catalog' or 'density'")
+    if input_type == "density":
+        if config.get("geometry") != "box-like":
+            raise ValueError("Density inputs currently require box-like geometry")
+        if config.get("statistic") not in ("pk", "bk_sugi"):
+            raise ValueError("Density inputs support pk and bk_sugi")
+        if config.get("apply_rsd", False):
+            raise ValueError("Apply RSD before supplying a density field; set apply_rsd=False")
+        config.setdefault("apply_rsd", False)
+        config["interlaced"] = False
+        config.setdefault("compensation", False)
+        config.setdefault("column_names", [])
+        config.setdefault("cosmology", None)
+        config.setdefault("redshift_box", None)
+        config.setdefault("rsd", [0, 0, 1])
+        config.setdefault("sampler", "cic")
+        if config.get("correlation_mode") not in ("auto", "cross"):
+            raise ValueError("correlation_mode must be 'auto' or 'cross'")
+        labels = ["a"] + (["b"] if config["correlation_mode"] == "cross" else [])
+        if config.get("statistic") == "bk_sugi":
+            validate_tracer(config["tracer_type"], config["correlation_mode"])
+            if config["tracer_type"] == "abc":
+                labels.append("c")
+        for label in labels:
+            if config.get("fields", {}).get(f"data_{label}") is None:
+                raise ValueError(f"Missing density field data_{label}")
     if config.get("statistic") == "bk_sugi":
         if "shotnoise-mode" in config and "shotnoise_mode" not in config:
             config["shotnoise_mode"] = config.pop("shotnoise-mode")

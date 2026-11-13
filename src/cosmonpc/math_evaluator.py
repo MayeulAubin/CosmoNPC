@@ -3,6 +3,13 @@ import sympy as sp
 import gc
 from mpi4py import MPI
 
+
+def identity_compensation():
+    """An already gridded field has no implicit particle assignment window."""
+    def identity(k, values):
+        return values
+    return [(None, identity, "circular")]
+
 """
 Get the distance of every mesh grid to the mesh-center in k-space for radial binning
 as well as get the normalized position of every mesh grid in k/x-space for spherical harmonics
@@ -12,13 +19,10 @@ as well as get the normalized position of every mesh grid in k/x-space for spher
 def get_kgrid(cfield):
     kgrid = [np.real(kk) for kk in cfield.x]
     knorm = np.sqrt(sum(np.real(kk) ** 2 for kk in cfield.x))
-    normalized_kgrid = []
-    for k in kgrid:
-        normalized_kgrid.append(k / knorm)
-    # we used the property of pmesh
-    if knorm[0, 0, 0] == 0.0:
-        for k in normalized_kgrid:
-            k[0, 0, 0] = 0.0
+    normalized_kgrid = [
+        np.divide(k, knorm, out=np.zeros_like(knorm), where=knorm != 0)
+        for k in kgrid
+    ]
     return normalized_kgrid, knorm
 
 

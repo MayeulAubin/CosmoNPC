@@ -3,6 +3,7 @@ import gc
 import numpy as np
 from mpi4py import MPI
 from .mesh_generator import *
+from .density_processor import get_density_meshes
 from .clustering_estimator import *
 from .param_helper import (
     catalog_check,
@@ -13,6 +14,12 @@ from .param_helper import (
 
 
 def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
+    def box_mesh(*args, **mesh_kwargs):
+        if kwargs.get("input_type") == "density":
+            return get_density_meshes(*args, **mesh_kwargs,
+                                      field_origin=kwargs.get("field_origin", [0., 0., 0.]))
+        return get_mesh_box(*args, **mesh_kwargs)
+
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -23,9 +30,9 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
     )
 
     if rank == 0:
-        logging.info(
-            f"Running {correlation_mode} {statistic} task with catalogs:{catalogs},\n"
-        )
+        names = {key: get_catalog_name(value, key) for key, value in catalogs.items()
+                 if value is not None}
+        logging.info(f"Running {correlation_mode} {statistic} task with inputs: {names}")
 
     k_max, nmesh, boxsize = kwargs["k_max"], kwargs["nmesh"], kwargs["boxsize"]
     nyquist_freq = np.pi * nmesh[0] / boxsize[0]
@@ -77,7 +84,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                                  since odd poles are defaultly set to 0 for periodic boxes."
                 )
 
-            stat_attrs, rfield_a, rfield_b = get_mesh_box(
+            stat_attrs, rfield_a, rfield_b = box_mesh(
                 catalogs,
                 correlation_mode,
                 nmesh=kwargs["nmesh"],
@@ -87,12 +94,12 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 interlaced=kwargs["interlaced"],
                 column_names=kwargs["column_names"],
                 comm=comm,
+                precision=kwargs.get("precision", "double"),
                 statistic=statistic,
                 apply_rsd=kwargs["apply_rsd"],
                 para_cosmo=kwargs["cosmology"],
                 redshift_box=kwargs["redshift_box"],
                 los=kwargs["rsd"],
-                precision=kwargs.get("precision", "double"),
             )
 
         # add more information
@@ -203,7 +210,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
             if rank == 0:
                 logging.info("Using box geometry...")
             validate_sugi_poles(angu_config, geometry)
-            stat_attrs, rfield_a, rfield_b, rfield_c = get_mesh_box(
+            stat_attrs, rfield_a, rfield_b, rfield_c = box_mesh(
                 catalogs,
                 correlation_mode,
                 statistic=statistic,
@@ -214,12 +221,12 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 interlaced=kwargs["interlaced"],
                 column_names=kwargs["column_names"],
                 comm=comm,
+                precision=kwargs.get("precision", "double"),
                 tracer_type=tracer_type,
                 apply_rsd=kwargs["apply_rsd"],
                 para_cosmo=kwargs["cosmology"],
                 redshift_box=kwargs["redshift_box"],
                 los=kwargs["rsd"],
-                precision=kwargs.get("precision", "double"),
             )
         else:
             if rank == 0:
@@ -240,9 +247,9 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 comp_weight_plan=kwargs["comp_weight_plan"],
                 para_cosmo=kwargs["cosmology"],
                 comm=comm,
+                precision=kwargs.get("precision", "double"),
                 normalization_scheme=kwargs.get("normalization_scheme", "particle"),
                 alpha_scheme=kwargs.get("alpha_scheme", "pypower"),
-                precision=kwargs.get("precision", "double"),
             )
 
         # add more information
@@ -336,13 +343,15 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
 def run_stats(config):
     comm = MPI.COMM_WORLD
     # check the configuration and create output directory
+    config = dict(config)
     validate_config(config)
-    catalog_check(
-        config["catalogs"],
-        config["geometry"],
-        config["correlation_mode"],
-        config["statistic"],
-    )
+    if config.get("input_type") == "density":
+        config["catalogs"] = config.pop("fields")
+    else:
+        catalog_check(
+            config["catalogs"], config["geometry"], config["correlation_mode"],
+            config["statistic"], config.get("tracer_type"),
+        )
     if comm.rank == 0:
         os.makedirs(config["output_dir"], exist_ok=True)
 
