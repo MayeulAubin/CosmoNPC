@@ -154,6 +154,8 @@ def validate_boolean_fields(config):
 
 
 def validate_config(config):
+    from .precision import complex_dtype
+    complex_dtype(config.setdefault("precision", "double"))
     if config.get("statistic") == "bk_sugi":
         if "shotnoise-mode" in config and "shotnoise_mode" not in config:
             config["shotnoise_mode"] = config.pop("shotnoise-mode")

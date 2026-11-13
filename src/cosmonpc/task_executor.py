@@ -64,6 +64,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 normalization_scheme=kwargs["normalization_scheme"],
                 alpha_scheme=kwargs.get("alpha_scheme", "pypower"),
                 comm=comm,
+                precision=kwargs.get("precision", "double"),
             )
         else:
             if rank == 0:
@@ -91,6 +92,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 para_cosmo=kwargs["cosmology"],
                 redshift_box=kwargs["redshift_box"],
                 los=kwargs["rsd"],
+                precision=kwargs.get("precision", "double"),
             )
 
         # add more information
@@ -217,6 +219,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 para_cosmo=kwargs["cosmology"],
                 redshift_box=kwargs["redshift_box"],
                 los=kwargs["rsd"],
+                precision=kwargs.get("precision", "double"),
             )
         else:
             if rank == 0:
@@ -239,6 +242,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 comm=comm,
                 normalization_scheme=kwargs.get("normalization_scheme", "particle"),
                 alpha_scheme=kwargs.get("alpha_scheme", "pypower"),
+                precision=kwargs.get("precision", "double"),
             )
 
         # add more information

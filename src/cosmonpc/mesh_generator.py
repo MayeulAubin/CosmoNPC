@@ -1,4 +1,5 @@
 import numpy as np
+from .precision import complex_dtype
 from pmesh import ParticleMesh
 from numpy.lib import format
 from mpi4py import MPI
@@ -28,6 +29,7 @@ def get_mesh_box(
     para_cosmo=None,
     redshift_box=None,
     los=None,
+    precision="double",
 ):
     """
     Generate mesh fields and compute number densities for multi-galaxy catalogs in periodic boxes.
@@ -121,7 +123,8 @@ def get_mesh_box(
 
     # Mesh generation
     rfield_a = pm_painter(
-        data_a["Position"], data_a["WEIGHT"], Nmesh, boxsize, sampler, interlaced, comm
+        data_a["Position"], data_a["WEIGHT"], Nmesh, boxsize, sampler, interlaced, comm,
+        precision=precision,
     )
     if rank == 0:
         logging.info(f"Mesh for tracer_a generated.")
@@ -134,6 +137,7 @@ def get_mesh_box(
             sampler,
             interlaced,
             comm,
+            precision=precision,
         )
         if rank == 0:
             logging.info(f"Mesh for tracer_b generated.")
@@ -149,6 +153,7 @@ def get_mesh_box(
             sampler,
             interlaced,
             comm,
+            precision=precision,
         )
         if rank == 0:
             logging.info(f"Mesh for tracer_c generated.")
@@ -170,7 +175,7 @@ def get_mesh_box(
 
 
 def pm_painter(
-    Position, WEIGHT, Nmesh, boxsize, sampler, interlaced, comm, boxcenter=None
+    Position, WEIGHT, Nmesh, boxsize, sampler, interlaced, comm, boxcenter=None, precision="double"
 ):
     """
     Paint particles onto a mesh using ParticleMesh.
@@ -187,7 +192,7 @@ def pm_painter(
         sampler = "NEAREST"
 
     pm = ParticleMesh(
-        BoxSize=boxsize, Nmesh=Nmesh, dtype="complex128", resampler=sampler, comm=comm
+        BoxSize=boxsize, Nmesh=Nmesh, dtype=complex_dtype(precision), resampler=sampler, comm=comm
     )
 
     if not interlaced:
@@ -239,6 +244,7 @@ def get_mesh_pk_survey(
     comm,
     normalization_scheme,
     alpha_scheme="pypower",
+    precision="double",
 ):
     """
     Generate meshes for power spectrum measurement from survey-like catalog in both single and multiple tracer cases.
@@ -364,6 +370,7 @@ def get_mesh_pk_survey(
         interlaced,
         comm,
         boxcenter=boxcenter,
+        precision=precision,
     )
 
     if rank == 0:
@@ -377,6 +384,7 @@ def get_mesh_pk_survey(
         interlaced,
         comm,
         boxcenter=boxcenter,
+        precision=precision,
     )
 
     # revover to physical number density
@@ -467,6 +475,7 @@ def get_mesh_pk_survey(
             interlaced,
             comm,
             boxcenter=boxcenter,
+            precision=precision,
         )
         if rank == 0:
             logging.info(f"Start generating meshes for randoms catalog of tracer_b.")
@@ -479,6 +488,7 @@ def get_mesh_pk_survey(
             interlaced,
             comm,
             boxcenter=boxcenter,
+            precision=precision,
         )
 
         # revover to physical number density
@@ -569,6 +579,7 @@ def get_mesh_bk_survey(
     comm,
     normalization_scheme="particle",
     alpha_scheme="pypower",
+    precision="double",
 ):
     """
     Framework function for survey-like bispectrum meshes.
@@ -691,6 +702,7 @@ def get_mesh_bk_survey(
             interlaced,
             comm,
             boxcenter=boxcenter,
+            precision=precision,
         )
         if rank == 0:
             logging.info(
@@ -705,6 +717,7 @@ def get_mesh_bk_survey(
             interlaced,
             comm,
             boxcenter=boxcenter,
+            precision=precision,
         )
 
         rfield_data *= 1 / vol_per_cell
@@ -938,6 +951,7 @@ def get_mesh_bk_survey(
                 interlaced,
                 comm,
                 boxcenter=boxcenter,
+                precision=precision,
             )
             rfield_randoms_a_even = pm_painter(
                 randoms_a_even["Position"],
@@ -948,6 +962,7 @@ def get_mesh_bk_survey(
                 interlaced,
                 comm,
                 boxcenter=boxcenter,
+                precision=precision,
             )
             rfield_randoms_a_odd *= alpha_a_odd / vol_per_cell
             rfield_randoms_a_even *= alpha_a_even / vol_per_cell
@@ -1046,6 +1061,7 @@ def get_N_field(
     boxcenter,
     comm,
     normalization_scheme="particle",
+    precision="double",
 ):
     """
     Build N-field for shot-noise pipeline in real space (no Y_lm and no FFT here).
@@ -1123,6 +1139,7 @@ def get_N_field(
         interlaced,
         comm,
         boxcenter=boxcenter,
+        precision=precision,
     )
 
     if rank == 0:
@@ -1138,6 +1155,7 @@ def get_N_field(
         interlaced,
         comm,
         boxcenter=boxcenter,
+        precision=precision,
     )
 
     rfield_data /= vol_per_cell

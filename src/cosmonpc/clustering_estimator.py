@@ -749,6 +749,7 @@ def calculate_power_spectrum_box(
 def calculate_bk_sugi_box(
     rfield_a, rfield_b, rfield_c, correlation_mode, stat_attrs, comm, **kwargs
 ):
+    complex_type = rfield_a.dtype
     rank = comm.Get_rank()
     # Extract mesh attributes
     data_vector_mode = stat_attrs.get("data_vector_mode", "diagonal")
@@ -877,7 +878,7 @@ def calculate_bk_sugi_box(
                 f"Rank {rank}: Using block_size = {block_size} for full data vector mode."
             )
         # create a full k_bins x k_bins array to store the results,
-        total_res = np.zeros((k_bins, k_bins)).astype("complex128")
+        total_res = np.zeros((k_bins, k_bins)).astype(complex_type)
 
         for ss in range(len(magnetic_configs)):
             (m1, m2, M) = magnetic_configs[ss]
@@ -886,7 +887,7 @@ def calculate_bk_sugi_box(
                     f"Rank {rank}: {'='*20}Processing magnetic configuration m1={m1}, m2={m2}, M={M}{'='*20}"
                 )
 
-            sub_res = np.zeros((k_bins, k_bins)).astype("complex128")
+            sub_res = np.zeros((k_bins, k_bins)).astype(complex_type)
             ylm_1 = get_Ylm(ell_1, m1, Racah_normalized=True)
             ylm_2 = get_Ylm(ell_2, m2, Racah_normalized=True)
             if rank == 0:
@@ -993,7 +994,7 @@ def calculate_bk_sugi_box(
                 else:
                     total_res += 2 * np.real(sub_res)
     elif data_vector_mode == "diagonal":
-        total_res = np.zeros(k_bins).astype("complex128")
+        total_res = np.zeros(k_bins).astype(complex_type)
 
         for ss in range(len(magnetic_configs)):
             (m1, m2, M) = magnetic_configs[ss]
@@ -1001,7 +1002,7 @@ def calculate_bk_sugi_box(
                 logging.info(
                     f"Rank {rank}: {'='*20}Processing magnetic configuration m1 = {m1}, m2 = {m2}, M = {M}...{'='*20}"
                 )
-            sub_res = np.zeros(k_bins).astype("complex128")
+            sub_res = np.zeros(k_bins).astype(complex_type)
             ylm_1 = get_Ylm(ell_1, m1, Racah_normalized=True)
             ylm_2 = get_Ylm(ell_2, m2, Racah_normalized=True)
             if rank == 0:
@@ -1095,7 +1096,7 @@ def calculate_bk_sugi_box(
         if data_vector_mode == "diagonal":
             # Diagonal mode has only O(k_bins) work, so we keep the original
             # root-only path.
-            s3_local = np.zeros(k_bins, dtype="complex128")
+            s3_local = np.zeros(k_bins, dtype=complex_type)
             if rank == 0:
                 for i in range(k_bins):
                     if shotnoise_ana_all_eff:
@@ -1128,7 +1129,7 @@ def calculate_bk_sugi_box(
                         s3_local[i] = numer / denom
                 s3_local *= H_ells * N_ells
         elif data_vector_mode == "full":
-            s3_local = np.zeros((k_bins, k_bins), dtype="complex128")
+            s3_local = np.zeros((k_bins, k_bins), dtype=complex_type)
             # Flatten the (i, j) plane so the workload is shared uniformly
             # over ranks without extra bookkeeping or communication.
             for flat_idx in range(rank, k_bins * k_bins, size):
@@ -1181,8 +1182,8 @@ def calculate_bk_sugi_box(
     def calculate_shot_noise_s3_box_fft():
         if tracer_type in ["aba", "abb"]:
             if data_vector_mode == "full":
-                return np.zeros((k_bins, k_bins), dtype="complex128")
-            return np.zeros(k_bins, dtype="complex128")
+                return np.zeros((k_bins, k_bins), dtype=complex_type)
+            return np.zeros(k_bins, dtype=complex_type)
         def build_source_field_fft():
             # In box geometry M is fixed to 0, so the k3 source field is
             # shared by all magnetic sub-configurations.
@@ -1220,14 +1221,14 @@ def calculate_bk_sugi_box(
         same_ell_12 = ell_1 == ell_2
         source_field_fft = build_source_field_fft()
         if data_vector_mode == "diagonal":
-            s3_local = np.zeros(k_bins, dtype="complex128")
+            s3_local = np.zeros(k_bins, dtype=complex_type)
 
             for ss, (m1, m2, M) in enumerate(magnetic_configs):
                 if rank == 0:
                     logging.info(
                         f"Rank {rank}: {'='*20}Processing magnetic configuration m1={m1}, m2={m2}, M={M} for FFT-calculated S3 shot noise...{'='*20}"
                     )
-                sub_res = np.zeros(k_bins, dtype="complex128")
+                sub_res = np.zeros(k_bins, dtype=complex_type)
 
                 can_sym_equal = same_ell_12 and (m1 == m2)
                 can_sym_conj = same_ell_12 and (m1 == -m2)
@@ -1272,14 +1273,14 @@ def calculate_bk_sugi_box(
                     else:
                         s3_local += 2.0 * np.real(sub_res)
         elif data_vector_mode == "full":
-            s3_local = np.zeros((k_bins, k_bins), dtype="complex128")
+            s3_local = np.zeros((k_bins, k_bins), dtype=complex_type)
 
             for ss, (m1, m2, M) in enumerate(magnetic_configs):
                 if rank == 0:
                     logging.info(
                         f"Rank {rank}: {'='*20}Processing magnetic configuration m1={m1}, m2={m2}, M={M} for FFT-calculated S3 shot noise...{'='*20}"
                     )
-                sub_res = np.zeros((k_bins, k_bins), dtype="complex128")
+                sub_res = np.zeros((k_bins, k_bins), dtype=complex_type)
 
                 can_sym_equal = same_ell_12 and (m1 == m2)
                 can_sym_conj = same_ell_12 and (m1 == -m2)
@@ -1458,8 +1459,8 @@ def calculate_bk_sugi_box(
 
             # Convert the 1d vector to (k1,k2) plane, note that SN1 is only related to k1, SN2 is only related to k2,
             if data_vector_mode == "full":
-                SN1_full = np.zeros((k_bins, k_bins)).astype("c16")
-                SN2_full = np.zeros((k_bins, k_bins)).astype("c16")
+                SN1_full = np.zeros((k_bins, k_bins)).astype(complex_type)
+                SN2_full = np.zeros((k_bins, k_bins)).astype(complex_type)
                 if np.isscalar(SN1) or np.ndim(SN1) == 0:
                     SN1_full[:] = SN1
                 else:
@@ -1569,6 +1570,7 @@ def calculate_bk_sugi_box(
 def calculate_bk_sugi_survey(
     rfield_a, rfield_b, rfield_c, correlation_mode, stat_attrs, comm, **kwargs
 ):
+    complex_type = rfield_a.dtype
     """
     Survey-like Sugiyama bispectrum estimator.
 
@@ -1699,7 +1701,7 @@ def calculate_bk_sugi_survey(
             )
         _log(1, "INIT", f"full_mode block_size={block_size}")
 
-        total_res = np.zeros((k_bins, k_bins)).astype("complex128")
+        total_res = np.zeros((k_bins, k_bins)).astype(complex_type)
 
         for ss in range(len(magnetic_configs)):
             (m1, m2, M) = magnetic_configs[ss]
@@ -1714,7 +1716,7 @@ def calculate_bk_sugi_survey(
                 )
                 continue
 
-            sub_res = np.zeros((k_bins, k_bins)).astype("complex128")
+            sub_res = np.zeros((k_bins, k_bins)).astype(complex_type)
             # Recompute G_{L,M} only when M changes; otherwise reuse.
             if M != current_M:
                 if G_LM_current is not None:
@@ -1924,7 +1926,7 @@ def calculate_bk_sugi_survey(
             gc.collect()
 
     elif data_vector_mode == "diagonal":
-        total_res = np.zeros(k_bins).astype("complex128")
+        total_res = np.zeros(k_bins).astype(complex_type)
         diagonal_reuse_fixed_m2_leg = ell_2 == 0 and all(
             cfg[1] == 0 for cfg in magnetic_configs
         )
@@ -1969,7 +1971,7 @@ def calculate_bk_sugi_survey(
                 )
                 continue
 
-            sub_res = np.zeros(k_bins).astype("complex128")
+            sub_res = np.zeros(k_bins).astype(complex_type)
             # Recompute G_{L,M} only when M changes; otherwise reuse.
             if M != current_M:
                 if G_LM_current is not None:
@@ -2152,6 +2154,7 @@ def calculate_bk_sugi_survey(
             boxcenter=stat_attrs["boxcenter"],
             comm=comm,
             normalization_scheme=stat_attrs.get("normalization_scheme", "particle"),
+            precision=stat_attrs.get("precision", "double"),
         )
         _log(
             1,
@@ -2176,6 +2179,7 @@ def calculate_bk_sugi_survey(
             boxcenter=stat_attrs["boxcenter"],
             comm=comm,
             normalization_scheme=stat_attrs.get("normalization_scheme", "particle"),
+            precision=stat_attrs.get("precision", "double"),
         )
         _log(1, "SHOT", "selection: use rfield_a + N_field_b for shot-noise terms.")
     else:
@@ -2196,6 +2200,7 @@ def calculate_bk_sugi_survey(
             boxcenter=stat_attrs["boxcenter"],
             comm=comm,
             normalization_scheme=stat_attrs.get("normalization_scheme", "particle"),
+            precision=stat_attrs.get("precision", "double"),
         )
         _log(1, "SHOT", "selection: use rfield_a + N_field_a for shot-noise terms.")
 
@@ -2238,7 +2243,7 @@ def calculate_bk_sugi_survey(
         L channel. The S_LM subtraction removes the disconnected same-object
         piece that exists only in the pure auto / same-tracer case.
         """
-        S1_local = np.zeros(k_bins, dtype="complex128")
+        S1_local = np.zeros(k_bins, dtype=complex_type)
 
         if not (ell_1 == L and ell_2 == 0):
             _log(
@@ -2263,17 +2268,17 @@ def calculate_bk_sugi_survey(
         use_sbar_term = correlation_mode == "auto" and tracer_type == "aaa"
         if use_sbar_term:
             if S_LM_shot is None:
-                S_LM_arr = np.zeros(L + 1, dtype="complex128")
+                S_LM_arr = np.zeros(L + 1, dtype=complex_type)
                 _log(
                     1,
                     "SHOT-S1",
                     "use S_LM correction with default zeros (S_LM_shot is None)",
                 )
             elif np.isscalar(S_LM_shot):
-                S_LM_arr = np.zeros(L + 1, dtype="complex128")
+                S_LM_arr = np.zeros(L + 1, dtype=complex_type)
                 S_LM_arr[0] = S_LM_shot
             else:
-                S_LM_arr = np.asarray(S_LM_shot, dtype="complex128")
+                S_LM_arr = np.asarray(S_LM_shot, dtype=complex_type)
             _log(1, "SHOT-S1", f"use S_LM correction with values={S_LM_arr}")
         else:
             S_LM_arr = None
@@ -2284,7 +2289,7 @@ def calculate_bk_sugi_survey(
         # implement the usual "count M=0 once, M>0 twice" rule in a compact way.
         _log(1, "SHOT-S1", f"start M-loop range=[0,{L}] use_sbar_term={use_sbar_term}")
         _log(1, "SHOT-S1", "strategy=accumulate_complex_field_then_bin_then_2Re")
-        accum_field = np.zeros_like(cfield_delta[:], dtype="complex128")
+        accum_field = np.zeros_like(cfield_delta[:], dtype=complex_type)
         for M in range(0, L + 1):
             m_weight = 0.5 if M == 0 else 1.0
             _log(2, "SHOT-S1", f"processing M={M}, weight={m_weight}")
@@ -2344,7 +2349,7 @@ def calculate_bk_sugi_survey(
         against the k-triangle kernel q_ell. This separation keeps the expensive
         field-building step independent from the later bin-pair bookkeeping.
         """
-        Q_like = np.zeros(k3_bins, dtype="complex128")
+        Q_like = np.zeros(k3_bins, dtype=complex_type)
         if (rfield_shot is None) or (N_field_shot is None):
             _log(1, "SHOT-S3", "Q_L skipped: rfield_shot or N_field_shot is None.")
             return Q_like
@@ -2354,12 +2359,12 @@ def calculate_bk_sugi_survey(
         use_sbar_term = correlation_mode == "auto" and tracer_type == "aaa"
         if use_sbar_term:
             if S_LM_shot is None:
-                S_LM_arr = np.zeros(L + 1, dtype="complex128")
+                S_LM_arr = np.zeros(L + 1, dtype=complex_type)
             elif np.isscalar(S_LM_shot):
-                S_LM_arr = np.zeros(L + 1, dtype="complex128")
+                S_LM_arr = np.zeros(L + 1, dtype=complex_type)
                 S_LM_arr[0] = S_LM_shot
             else:
-                S_LM_arr = np.asarray(S_LM_shot, dtype="complex128")
+                S_LM_arr = np.asarray(S_LM_shot, dtype=complex_type)
             _log(1, "SHOT-S3", f"use S_LM correction with values={S_LM_arr}")
         else:
             S_LM_arr = None
@@ -2373,7 +2378,7 @@ def calculate_bk_sugi_survey(
         gc.collect()
 
         _log(1, "SHOT-S3", f"start Q_L loop M=[0,{L}] use_sbar_term={use_sbar_term}")
-        accum_field = np.zeros_like(cfield_N00[:], dtype="complex128")
+        accum_field = np.zeros_like(cfield_N00[:], dtype=complex_type)
         for M in range(0, L + 1):
             M_weight = 0.5 if M == 0 else 1.0
             _log(2, "SHOT-S3", f"Q_L processing M={M}, weight={M_weight}")
@@ -2409,7 +2414,7 @@ def calculate_bk_sugi_survey(
         sub_sum = 2.0 * np.real(sub_sum)
         total_sum = comm.reduce(sub_sum, op=MPI.SUM, root=0)
         if rank == 0:
-            Q_like = total_sum.astype("complex128")
+            Q_like = total_sum.astype(complex_type)
         Q_like = comm.bcast(Q_like if rank == 0 else None, root=0)
 
         del cfield_N00, accum_field, sub_sum
@@ -2434,8 +2439,8 @@ def calculate_bk_sugi_survey(
                 f"S3 forced to zero in mode={mode} because tracer_type={tracer_type}.",
             )
             if mode == "full":
-                return np.zeros((k_bins, k_bins), dtype="complex128")
-            return np.zeros(k_bins, dtype="complex128")
+                return np.zeros((k_bins, k_bins), dtype=complex_type)
+            return np.zeros(k_bins, dtype=complex_type)
 
         # Each output entry is independent once Q_like is known. We only exploit
         # this in full mode, where the k_bins^2 workload is large enough to
@@ -2448,7 +2453,7 @@ def calculate_bk_sugi_survey(
         size = comm.Get_size()
 
         if mode == "diagonal":
-            S3_local = np.zeros(k_bins, dtype="complex128")
+            S3_local = np.zeros(k_bins, dtype=complex_type)
             # Diagonal mode has only O(k_bins) work, so we keep the original
             # root-only path.
             if rank == 0:
@@ -2471,7 +2476,7 @@ def calculate_bk_sugi_survey(
                 _log(1, "SHOT-S3", "diagonal analytical S3 calculation finished.")
             return comm.bcast(S3_local if rank == 0 else None, root=0)
         elif mode == "full":
-            S3_local = np.zeros((k_bins, k_bins), dtype="complex128")
+            S3_local = np.zeros((k_bins, k_bins), dtype=complex_type)
             # Flatten the full (i, j) plane to distribute work evenly with a
             # single rank/size stride rule.
             for flat_idx in range(rank, k_bins * k_bins, size):
@@ -2521,8 +2526,8 @@ def calculate_bk_sugi_survey(
         """
         if tracer_type in ["aba", "abb"]:
             if mode == "full":
-                return np.zeros((k_bins, k_bins), dtype="complex128")
-            return np.zeros(k_bins, dtype="complex128")
+                return np.zeros((k_bins, k_bins), dtype=complex_type)
+            return np.zeros(k_bins, dtype=complex_type)
         if shotnoise_mode == "ana":
             Q_like = calculate_Q_L_like(rfield_shot, N_field_shot, S_LM_shot)
             return calculate_shot_noise_S3_like(Q_like, mode=mode)
@@ -2576,12 +2581,12 @@ def calculate_bk_sugi_survey(
             use_sbar_term = correlation_mode == "auto" and tracer_type == "aaa"
             if use_sbar_term:
                 if S_LM_shot is None:
-                    S_LM_arr = np.zeros(L + 1, dtype="complex128")
+                    S_LM_arr = np.zeros(L + 1, dtype=complex_type)
                 elif np.isscalar(S_LM_shot):
-                    S_LM_arr = np.zeros(L + 1, dtype="complex128")
+                    S_LM_arr = np.zeros(L + 1, dtype=complex_type)
                     S_LM_arr[0] = S_LM_shot
                 else:
-                    S_LM_arr = np.asarray(S_LM_shot, dtype="complex128")
+                    S_LM_arr = np.asarray(S_LM_shot, dtype=complex_type)
             else:
                 S_LM_arr = None
 
@@ -2600,14 +2605,14 @@ def calculate_bk_sugi_survey(
             processed_fft_cfg = set()
 
             if mode == "diagonal":
-                S3_local = np.zeros(k_bins, dtype="complex128")
+                S3_local = np.zeros(k_bins, dtype=complex_type)
                 _log(
                     1,
                     "SHOT-S3",
                     f"start FFT S3 diagonal with {len(magnetic_configs)} sub-configs.",
                 )
             elif mode == "full":
-                S3_local = np.zeros((k_bins, k_bins), dtype="complex128")
+                S3_local = np.zeros((k_bins, k_bins), dtype=complex_type)
                 _log(
                     1,
                     "SHOT-S3",
@@ -2632,7 +2637,7 @@ def calculate_bk_sugi_survey(
                 can_sym_equal = (ell_1 == ell_2) and (m1 == m2)
                 can_sym_conj = (ell_1 == ell_2) and (m1 == -m2)
                 if mode == "diagonal":
-                    sub_res = np.zeros(k_bins, dtype="complex128")
+                    sub_res = np.zeros(k_bins, dtype=complex_type)
                     for i in range(k_bins):
                         # Diagonal mode: build only the current shell fields to keep memory bounded.
                         shell_field_1 = build_shell_filtered_field(
@@ -2663,7 +2668,7 @@ def calculate_bk_sugi_survey(
                         del shell_field_1
                         gc.collect()
                 else:
-                    sub_res = np.zeros((k_bins, k_bins), dtype="complex128")
+                    sub_res = np.zeros((k_bins, k_bins), dtype=complex_type)
                     use_symmetry = can_sym_equal or can_sym_conj
                     for bi in range(0, k_bins, block_size):
                         i_end = min(k_bins, bi + block_size)
@@ -2807,9 +2812,9 @@ def calculate_bk_sugi_survey(
     # expanded from 1d vectors onto the full (k1, k2) plane.
     if data_vector_mode == "diagonal":
         SN0 = 0.0 + 0.0j
-        SN1 = np.zeros(k_bins, dtype="complex128")
-        SN2 = np.zeros(k_bins, dtype="complex128")
-        SN3 = np.zeros(k_bins, dtype="complex128")
+        SN1 = np.zeros(k_bins, dtype=complex_type)
+        SN2 = np.zeros(k_bins, dtype=complex_type)
+        SN3 = np.zeros(k_bins, dtype=complex_type)
         SN3_fft = None
 
         if tracer_type == "abc":
@@ -2872,7 +2877,7 @@ def calculate_bk_sugi_survey(
                 SN1 = calculate_shot_noise_S1_like(rfield_shot, N_field_shot, S_LM_shot)
                 _log(1, "SHOT", "SN1 active.")
             else:
-                SN1 = np.zeros(k_bins, dtype="complex128")
+                SN1 = np.zeros(k_bins, dtype=complex_type)
                 _log(
                     1,
                     "SHOT",
@@ -2901,7 +2906,7 @@ def calculate_bk_sugi_survey(
                     "active: tracer_type=aba and angu_config=(0,0,0), using rfield_b + N_field_a.",
                 )
             else:
-                SN2 = np.zeros(k_bins, dtype="complex128")
+                SN2 = np.zeros(k_bins, dtype=complex_type)
                 _log(
                     1,
                     "SHOT-S2",
@@ -2937,14 +2942,14 @@ def calculate_bk_sugi_survey(
                     )
                 _log(1, "SHOT", "SN3 active.")
             else:
-                SN3 = np.zeros(k_bins, dtype="complex128")
-                SN3_fft = np.zeros(k_bins, dtype="complex128") if shotnoise_mode == "both" else None
+                SN3 = np.zeros(k_bins, dtype=complex_type)
+                SN3_fft = np.zeros(k_bins, dtype=complex_type) if shotnoise_mode == "both" else None
                 _log(1, "SHOT", f"SN3 set to 0 because tracer_type={tracer_type}.")
     else:
         SN0 = 0.0 + 0.0j
-        SN1 = np.zeros((k_bins, k_bins), dtype="complex128")
-        SN2 = np.zeros((k_bins, k_bins), dtype="complex128")
-        SN3 = np.zeros((k_bins, k_bins), dtype="complex128")
+        SN1 = np.zeros((k_bins, k_bins), dtype=complex_type)
+        SN2 = np.zeros((k_bins, k_bins), dtype=complex_type)
+        SN3 = np.zeros((k_bins, k_bins), dtype=complex_type)
         SN3_fft = None
 
         if tracer_type == "abc":
@@ -3007,7 +3012,7 @@ def calculate_bk_sugi_survey(
                 )
                 _log(1, "SHOT", "full mode SN1 active (from 1D S1-like).")
             else:
-                SN1_vec = np.zeros(k_bins, dtype="complex128")
+                SN1_vec = np.zeros(k_bins, dtype=complex_type)
                 _log(
                     1,
                     "SHOT",
@@ -3038,7 +3043,7 @@ def calculate_bk_sugi_survey(
                     "full_mode active: tracer_type=aba and angu_config=(0,0,0), using rfield_b + N_field_a.",
                 )
             else:
-                SN2_vec = np.zeros(k_bins, dtype="complex128")
+                SN2_vec = np.zeros(k_bins, dtype=complex_type)
                 _log(
                     1,
                     "SHOT-S2",
@@ -3075,9 +3080,9 @@ def calculate_bk_sugi_survey(
                     )
                 _log(1, "SHOT", "full mode SN3 active.")
             else:
-                SN3 = np.zeros((k_bins, k_bins), dtype="complex128")
+                SN3 = np.zeros((k_bins, k_bins), dtype=complex_type)
                 SN3_fft = (
-                    np.zeros((k_bins, k_bins), dtype="complex128")
+                    np.zeros((k_bins, k_bins), dtype=complex_type)
                     if shotnoise_mode == "both"
                     else None
                 )
