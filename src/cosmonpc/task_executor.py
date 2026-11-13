@@ -344,6 +344,9 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
 
 def run_stats(config):
     comm = MPI.COMM_WORLD
+    if config.get("statistic") == "wst":
+        from .wavelet_task import run_wavelet
+        return run_wavelet(config, comm)
     if "density_split" in config:
         from .density_split import run_density_split
         return run_density_split(config, comm)

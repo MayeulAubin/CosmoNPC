@@ -166,8 +166,8 @@ def validate_config(config):
             supplied = sum(config.get(key) is not None for key in ("survey_weight", "survey_randoms"))
             if supplied != 1:
                 raise ValueError("Survey fields require exactly one of survey_weight or survey_randoms")
-        if config.get("statistic") not in ("pk", "bk_sugi"):
-            raise ValueError("Density inputs support pk and bk_sugi")
+        if config.get("statistic") not in ("pk", "bk_sugi", "wst"):
+            raise ValueError("Density inputs support pk, bk_sugi, and wst")
         if config.get("apply_rsd", False):
             raise ValueError("Apply RSD before supplying a density field; set apply_rsd=False")
         config.setdefault("apply_rsd", False)

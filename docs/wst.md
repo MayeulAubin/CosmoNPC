@@ -37,6 +37,54 @@ responses. Keeping just a real inverse transform would produce incorrect moments
 All m components are evaluated, including negative m, so no continuum conjugacy
 assumption is made on discrete Nyquist planes.
 
+## Inputs and survey conventions
+
+Use `statistic='wst'` through the existing `run_stats(config)` entry point.
+Overdensity fields are preserved, including their mean. Explicit `kind='counts'`
+fields and periodic catalogues are divided by their covered-cell mean and have
+one subtracted. `mean_density` can override the counts reference density.
+Catalogue RSD, assignment, and interlacing use the existing box reader/painter.
+`compensation=False` is the WST default for all inputs, matching measurement of
+the painted density; explicit assignment compensation is applied once before WST.
+Only the real physical density is retained after painting/deconvolution.
+
+Survey fields accept the same `survey_weight` (array or HDF5 Field, [0,1]) or
+`survey_randoms` as the power-spectrum field adapter. They measure
+`I = W*delta/sqrt(I2)`, with `I2=dV*sum(W**2)` over covered cells. Random-derived
+W includes completeness and FKP weights and is rasterized at field cell centers.
+Its overall normalization cancels against sqrt(I2). An overdensity field remains
+uncentered. Supplied counts use the covered-volume mean unless `mean_density`
+is specified; counts alone cannot separate unknown radial selection from density.
+
+Survey catalogues reuse `get_mesh_pk_survey`, with its completeness/FKP weights,
+alpha conventions, bounds checks and fixed/automatic box center. WST uses
+`I = (n_data_weighted-alpha*n_randoms_weighted)/sqrt(I2)` where the existing
+`particle` normalization (default) gives I2=I_rand, or `mixed-mesh` gives I2=I_mesh.
+This field is not a selection-divided estimate of delta.
+
+`wst.mask` supplies the binary footprint, as a global array or HDF5 Field.
+Missing density tiles are automatically excluded. For survey fields, coverage
+is additionally intersected with positive selection. For survey catalogues,
+an omitted mask is inferred from noninterlaced positive random coverage: finite
+random density can leave holes, so supply the actual footprint when available.
+An explicit catalogue mask replaces this inferred footprint. Catalogue grid
+indices follow existing painting coordinates `Position-boxcenter` modulo the box;
+field grids use `field_origin+(index+0.5)*cellsize`. Align a mask to the appropriate
+convention. WST is translation invariant on a periodic box, but relative alignment
+of mask and field matters.
+
+`wst.sources=['data_a','data_b']` computes independent WST vectors sequentially,
+with independent coverage masks and constant working mesh count. Cross-WST
+conventions are not defined by this estimator; `correlation_mode='cross'` raises
+an error instead of borrowing the power-spectrum meaning. WST and density_split
+are separate estimators. No Poisson shot-noise subtraction is applied to these
+nonlinear coefficients; noise and selection must be represented in mocks.
+
+Root receives the output dictionary and saves `output_dir/wst.npy`. Each entry
+in `measurements` contains S0 `(nq,)`, S1 `(nfirst,nq)`, S2 `(nsecond,nq)`, and
+`index1=(j1,l)` / `index2=(j1,j2,l)` rows identifying the coefficients. Powers,
+wavelet convention, coverage, input normalization and FFT plan are recorded.
+
 For s selected scales and e angular degrees, second order costs
 `1 + e*(s-1)` forward FFTs and
 `(s+s*(s-1)/2)*sum_l(2*l+1)` inverse FFTs. At J=L=4 that means 21 forward and
