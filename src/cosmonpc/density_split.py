@@ -1,4 +1,4 @@
-"""Density-split box statistics built from volume-sampled quantile fields."""
+"""Density-split orchestration using the existing box and survey estimators."""
 import logging
 import os
 import numpy as np
@@ -19,12 +19,12 @@ def _configuration(config):
     if not isinstance(options, dict):
         raise TypeError('density_split must be a configuration dictionary')
     options = dict(options)
-    allowed = {'source', 'nquantiles', 'smoothing_radius', 'tie_seed', 'mask', 'measurements'}
+    allowed = {'source', 'nquantiles', 'smoothing_radius', 'tie_seed', 'mask', 'measurements', 'query_ratio'}
     unknown = options.keys() - allowed
     if unknown:
         raise ValueError(f'Unknown density_split options: {sorted(unknown)}')
-    if base.get('geometry', 'box-like') != 'box-like':
-        raise ValueError('Density-split currently supports periodic/masked boxes, not survey estimators')
+    if base.get('geometry', 'box-like') not in ('box-like','survey-like'):
+        raise ValueError('geometry must be box-like or survey-like')
     if base.get('statistic') not in ('pk', 'bk_sugi'):
         raise ValueError('Density-split statistic must be pk or bk_sugi')
     base.setdefault('geometry', 'box-like')
@@ -39,15 +39,31 @@ def _configuration(config):
     base.setdefault('poles', [0, 2])
     base.setdefault('angu_config', [0, 0, 0])
     base.setdefault('compensation', base['input_type'] == 'catalog')
+    if base['geometry'] == 'survey-like':
+        base.setdefault('z_range', None)
+        base.setdefault('comp_weight_plan', {'scheme':None, 'name_alias':None})
+        base.setdefault('normalization_scheme', 'mixed-mesh')
+        base.setdefault('alpha_scheme', 'pypower')
+        if base['alpha_scheme'] not in ('pypower','nbodykit'):
+            raise ValueError('alpha_scheme must be pypower or nbodykit')
+        supported = ('particle','mixed-mesh') if base['statistic'] == 'pk' else ('particle','mesh','mixed-mesh')
+        if base['normalization_scheme'] not in supported:
+            raise ValueError(f'normalization_scheme must be one of {supported}')
     # In density-split mode the measurement legs determine auto/cross and
     # bispectrum ordering; these ordinary task flags do not select input legs.
     base['correlation_mode'] = 'auto'
     base['tracer_type'] = 'aaa'
+    if base['geometry'] == 'survey-like' and base['input_type'] != 'catalog':
+        raise ValueError('Survey density-split requires catalogue inputs and randoms; density fields use box-like geometry')
     validate_config(base)
-    validate_poles(base['poles'])
-    validate_sugi_poles(base['angu_config'], base['geometry'])
-    if not base['poles'] or all(p % 2 for p in base['poles']):
-        raise ValueError('At least one even power-spectrum pole is required for boxes')
+    if base['statistic'] == 'pk':
+        validate_poles(base['poles'])
+        if not base['poles'] or (base['geometry'] == 'box-like' and all(p % 2 for p in base['poles'])):
+            raise ValueError('At least one even power-spectrum pole is required for boxes')
+    else:
+        validate_sugi_poles(base['angu_config'], base['geometry'])
+        if base.get('data_vector_mode', 'diagonal') not in ('diagonal','full'):
+            raise ValueError('data_vector_mode must be diagonal or full')
     kmin, kmax, bins = base['k_min'], base['k_max'], base['k_bins']
     if not np.isfinite(kmin) or not np.isfinite(kmax) or not 0 <= kmin < kmax:
         raise ValueError('Require finite 0 <= k_min < k_max')
@@ -72,13 +88,30 @@ def _configuration(config):
     if options['source'] not in sources:
         raise ValueError('density_split.source must name an available data_a, data_b, or data_c')
     if base['input_type'] == 'catalog':
-        catalog_check(base['catalogs'], 'box-like', 'auto', base['statistic'])
+        catalog_check(base['catalogs'], base['geometry'], 'auto', base['statistic'])
     defaults = ([['Q', options['source']], ['Q', 'Q']] if base['statistic'] == 'pk' else
                 [['Q', options['source'], options['source']], ['Q', 'Q', options['source']], ['Q', 'Q', 'Q']])
     templates = options.get('measurements', defaults)
     measurements = _expand_measurements(templates, count, sources, 2 if base['statistic'] == 'pk' else 3)
     used = {options['source']} | {token for legs in measurements for token in legs if not token.startswith('Q')}
     sources = {name: source for name, source in sources.items() if name in used}
+    if base['geometry'] == 'survey-like':
+        for name in sources:
+            if base['catalogs'].get(name.replace('data_', 'randoms_')) is None:
+                raise ValueError(f'Survey density-split requires randoms for {name}')
+        cross = any(len(set(legs)) > 1 for legs in measurements)
+        if cross and base['normalization_scheme'] != 'mixed-mesh':
+            raise ValueError('Cross survey measurements require normalization_scheme=mixed-mesh, as in the standard estimators')
+        if base['statistic'] == 'pk' and cross and base['high_order_mode'] != 'default':
+            raise ValueError('Survey high_order_mode fast/compare requires auto measurements only')
+        ratio = options.setdefault('query_ratio', 5.)
+        if isinstance(ratio,(bool,np.bool_)) or not np.isscalar(ratio) or not np.isfinite(ratio) or ratio <= 0:
+            raise ValueError('query_ratio must be finite and positive')
+    elif 'query_ratio' in options:
+        raise ValueError('query_ratio applies only to survey random queries')
+    seed = options['tie_seed']
+    if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, (int, np.integer)) or not 0 <= seed < 1 << 64:
+        raise ValueError('tie_seed must be a uint64-compatible nonnegative integer')
     return base, options, sources, measurements
 
 
@@ -115,6 +148,8 @@ def prepare_density_split(config, comm=MPI.COMM_WORLD):
     No user-supplied overdensity is centered or otherwise renormalized.
     """
     base, options, sources, measurements = _configuration(config)
+    if base['geometry'] != 'box-like':
+        raise ValueError('Use prepare_survey_density_split for survey inputs')
     pm = ParticleMesh(Nmesh=base['nmesh'], BoxSize=base['boxsize'],
                       dtype=complex_dtype(base['precision']), comm=comm)
     template = pm.create(type='real')
@@ -198,6 +233,9 @@ def prepare_density_split(config, comm=MPI.COMM_WORLD):
 
 
 def run_density_split(config, comm=MPI.COMM_WORLD):
+    if config.get('geometry') == 'survey-like':
+        from .survey_density_split import run_survey_density_split
+        return run_survey_density_split(config, comm)
     tracers, labels, info, metadata, base, options, measurements = prepare_density_split(config, comm)
     template = next(iter(tracers.values()))
     cells, volume = int(np.prod(base['nmesh'])), float(np.prod(base['boxsize']))

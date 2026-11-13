@@ -72,6 +72,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 alpha_scheme=kwargs.get("alpha_scheme", "pypower"),
                 comm=comm,
                 precision=kwargs.get("precision", "double"),
+                boxcenter=kwargs.get("boxcenter"),
             )
         else:
             if rank == 0:
@@ -250,6 +251,7 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
                 precision=kwargs.get("precision", "double"),
                 normalization_scheme=kwargs.get("normalization_scheme", "particle"),
                 alpha_scheme=kwargs.get("alpha_scheme", "pypower"),
+                boxcenter=kwargs.get("boxcenter"),
             )
 
         # add more information

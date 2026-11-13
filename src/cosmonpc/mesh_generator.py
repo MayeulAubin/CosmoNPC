@@ -245,6 +245,7 @@ def get_mesh_pk_survey(
     normalization_scheme,
     alpha_scheme="pypower",
     precision="double",
+    boxcenter=None,
 ):
     """
     Generate meshes for power spectrum measurement from survey-like catalog in both single and multiple tracer cases.
@@ -261,7 +262,6 @@ def get_mesh_pk_survey(
     # Convert nmesh and boxsize to numpy arrays
     Nmesh = np.array(nmesh)
     boxsize = np.array(boxsize)
-    boxcenter = None
 
     catalog_bounds = {}
 
@@ -272,7 +272,7 @@ def get_mesh_pk_survey(
 
     # Load data and random catalogs
     # firstly we use randoms_a to determine the boxcenter
-    randoms_a, boxcenter = catalog_reader(
+    randoms_result = catalog_reader(
         catalogs["randoms_a"],
         geometry,
         column_names,
@@ -281,9 +281,16 @@ def get_mesh_pk_survey(
         comm,
         para_cosmo=para_cosmo,
         boxsize=boxsize,
+        boxcenter=boxcenter,
         catalog_type="randoms",
         normalization_scheme=normalization_scheme,
     )
+
+    if boxcenter is None:
+        randoms_a, boxcenter = randoms_result
+    else:
+        randoms_a = randoms_result
+    del randoms_result
 
     _store_catalog_bounds("randoms_a", randoms_a)
 
@@ -580,6 +587,7 @@ def get_mesh_bk_survey(
     normalization_scheme="particle",
     alpha_scheme="pypower",
     precision="double",
+    boxcenter=None,
 ):
     """
     Framework function for survey-like bispectrum meshes.
@@ -613,7 +621,6 @@ def get_mesh_bk_survey(
     boxsize = np.array(boxsize)
     vol_per_cell = np.prod(boxsize) / np.prod(nmesh)
     mesh_attrs = {"normalization_scheme": normalization_scheme}
-    boxcenter = None
     tracer_cache = {}
     catalog_bounds = {}
 
@@ -738,7 +745,7 @@ def get_mesh_bk_survey(
         return rfield, rfield_data, rfield_randoms
 
     # Build tracer_a first (defines boxcenter from randoms_a if needed).
-    randoms_a_preview, boxcenter = catalog_reader(
+    randoms_result = catalog_reader(
         catalogs["randoms_a"],
         geometry,
         column_names,
@@ -747,9 +754,16 @@ def get_mesh_bk_survey(
         comm,
         para_cosmo=para_cosmo,
         boxsize=boxsize,
+        boxcenter=boxcenter,
         catalog_type="randoms",
         normalization_scheme=normalization_scheme,
     )
+    if boxcenter is None:
+        randoms_a_preview, boxcenter = randoms_result
+    else:
+        randoms_a_preview = randoms_result
+    del randoms_result
+
     _store_catalog_bounds("randoms_a", randoms_a_preview)
     del randoms_a_preview
     gc.collect()

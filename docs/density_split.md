@@ -3,8 +3,9 @@
 Reference: [Paillas et al., arXiv:2309.16541, section 2.2.2](https://arxiv.org/html/2309.16541#S2.SS2.SSS2).
 That analysis uses smoothed environments sampled at random positions and
 configuration-space quantile auto/cross correlations. CosmoCM uses equal-volume
-mesh cells as its query sample. This is a gridded, volume-sampled version, not
-an exact reproduction of the paper's random-query estimator. Bispectrum
+mesh cells for boxes and samples the random catalogue for surveys. The box
+implementation is a gridded, volume-sampled version, not an exact reproduction
+of the paper's random-query estimator. Bispectrum
 measurements are an explicit extension using three specified field legs.
 
 ## Step 1: environment and quantiles
@@ -39,11 +40,12 @@ Gaussian radius 10 in the same length units as `boxsize`. No quantile is silentl
 discarded. The linear dependence is exposed through the partition identity;
 users may choose which quantiles to include in later inference.
 
-Current scope is periodic boxes and zero-filled masked boxes. A survey workflow
-requires selection-function/random-catalogue treatment and appropriate
-normalization, and must not be inferred from masked-box measurements.
+The box workflow supports periodic and zero-filled masked boxes with all current
+field and catalogue input formats. The survey workflow (Step 4) uses the current
+catalogue/random interface. As in ordinary runs, gridded field inputs currently
+require box-like geometry. A masked box is not a survey estimator.
 
-## Step 2: tracer loading and power multipoles
+## Step 2: box tracer loading and power multipoles
 
 Enable the independent workflow by adding `density_split` to a normal box
 configuration. Standard runs without that key keep their existing behavior.
@@ -109,7 +111,7 @@ precision, binning, and coverage metadata. It returns the same dictionary on
 rank zero, and None on other ranks. Input arrays and the caller configuration
 are not modified.
 
-There is no Poisson subtraction in this workflow (`shotnoise_policy="none"`).
+There is no Poisson subtraction in the box workflow (`shotnoise_policy="none"`).
 A density-selected query field is a nonlinear function of the tracer: ordinary
 catalogue auto/cross shot-noise formulas do not describe its contractions.
 This policy does **not** claim that particle noise is absent. Quantile auto
@@ -153,3 +155,124 @@ NumPy Fourier contractions for angular configurations `[0,0,0]` and `[2,0,2]`.
 They also check catalogue/count-field parity, both precisions, and repeat-call
 invariance. These are numerical estimator checks, not a validation of a
 cosmological model for density-selected bispectra.
+
+
+## Step 4: survey catalogues and existing estimator paths
+
+Survey runs use the same catalogue inputs as ordinary CosmoNPC survey runs:
+FITS files with the existing redshift/column/completeness configuration, or
+preprocessed structured NumPy catalogues with local rows on each MPI rank.
+Each referenced `data_a`, `data_b`, or `data_c` requires its corresponding
+`randoms_a`, `randoms_b`, or `randoms_c`. Survey field inputs remain unsupported,
+matching the ordinary pipeline; a zero-filled density field uses the masked-box
+path instead.
+
+```python
+from copy import deepcopy
+from cosmonpc.config import pk_survey
+from cosmonpc import run_stats
+
+config = deepcopy(pk_survey.CONFIG)
+config["catalogs"] = {"data_a": "galaxies.fits", "randoms_a": "randoms.fits"}
+config["output_dir"] = "./density_split_results"
+# Required for cross measurements, just as in the ordinary survey estimators.
+config["normalization_scheme"] = "mixed-mesh"
+config["density_split"] = {
+    "source": "data_a", "nquantiles": 5,
+    "smoothing_radius": 10., "query_ratio": 5., "tie_seed": 0,
+    "measurements": [["Q", "data_a"], ["Q", "Q"]],
+}
+result = run_stats(config)
+```
+
+Change to `statistic="bk_sugi"`, choose `angu_config` and diagonal/full mode,
+and use three-leg measurements as in Step 3. Existing `block_size`,
+`shotnoise_mode` (`ana`, `fft`, `both`), and `alpha_scheme` settings are passed
+through. The supported normalization restrictions remain those of the existing
+estimators: auto measurements may use their supported particle/mesh/mixed-mesh
+schemes, while cross measurements require mixed-mesh normalization. The fast
+and comparison high-order P modes remain available for auto-only selections
+with the same supported pole lists as ordinary runs.
+
+### Environmental field and query positions
+
+The environmental catalogue and its full random catalogue are painted with
+completeness weights, excluding FKP weights. Using
+`alpha_env = sum(W_data) / sum(W_random)`, the environmental mesh is
+`G / (alpha_env R) - 1` wherever R is positive. Gaussian smoothing is
+coverage-normalized as in Step 1. Environmental painting is non-interlaced to
+keep the random-count coverage nonnegative; the **measurement** meshes retain
+the user's interlacing and sampler settings.
+
+Queries are sampled from the source random catalogue, not from the galaxies.
+The smoothed environmental field is read at query positions with CiC
+interpolation. Interpolation is normalized by the interpolated binary
+coverage to avoid dilution at masked edges. Query points outside coverage are
+excluded. Quantiles have equal numbers of accepted queries (within one),
+ranked by the sampled environment. This follows the survey-query construction,
+rather than treating every box cell as an observed survey location.
+
+`query_ratio=5` requests five queries per source galaxy after the existing input
+cuts. The actual count is capped by available query candidates; both requested
+and accepted counts are recorded. Queries retain the random catalogue's weight
+and FKP convention. Their NZ is scaled from the parent random NZ by the
+quantile's total completeness weight divided by the source galaxies' total
+completeness weight. The same scale is applied to that quantile's background
+random NZ. This assumes the parent selection profile is appropriate for the
+quantile, as in standard shared-selection density-split modelling; it does not
+fit a new radial selection function for each density environment.
+
+### Independent random pools and normalization
+
+The full source random catalogue defines the environmental field. For measured
+spectra, random positions are deterministically partitioned into four pools:
+query candidates (pool 0) and three independent background pools (1–3), one per
+distinct ordered leg. Identical coordinates always get the same pool, including
+across reordered catalogues. Repeated legs reuse their own pool; distinct legs
+use different pools. This avoids shared-random self-pairs and self-triples that
+the existing cross estimators do not model. It reduces the available random
+population relative to using every random for every leg; provide enough
+randoms and check the recorded pool/query counts.
+
+The pool assignment is coordinate-based and independent of MPI decomposition.
+Exact query-count capping and tied-query ranking use rank-concatenated input-row
+IDs. Reproducibility of those two operations requires preserving global row
+order when repartitioning preprocessed arrays (as contiguous file partitions do).
+
+Each generated Q catalogue and its background are passed to the **existing**
+`get_mesh_pk_survey` / `get_mesh_bk_survey` and corresponding clustering
+estimators. Ordered triples map to the correct `aaa`, `aab`, `aba`, `abb`, or
+`abc` branch, keeping the existing self-term formulas. A shared boxcenter is
+computed from the full environmental random catalogue, preventing per-pool
+bounding boxes from shifting the embedding between measurements. The only
+mesh-API addition is an optional fixed `boxcenter`, which defaults to the
+previous behavior in ordinary runs. Estimator formulas are unchanged except
+for fixing the previously crashing zero `SN3_FFT` export in survey `abc` +
+`shotnoise_mode="both"` runs.
+
+Survey output records
+`shotnoise_policy="existing_catalogue_self_terms_disjoint_random_pools"`.
+It subtracts the existing catalogue self terms; it does not claim to remove all
+noise induced by estimating an environment from a finite galaxy sample.
+Survey window effects and the need for appropriate modelling/mocks remain as
+in ordinary survey measurements.
+
+## Validation and execution
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+PYTHONPATH=src mpiexec -n 2 python -m unittest discover -s tests -v
+```
+
+Box checks include independent Gaussian FFT smoothing, exact global-rank
+references, quantile identities, P0/P2 and B000/B202 Fourier oracles, ordered
+legs, catalogue/field parity, masks, HDF5 tiles, both precisions, and unchanged
+input arrays. Survey checks compare generated catalogue measurements to the
+ordinary public pipeline, covering all five bispectrum tracer patterns, FITS
+versus preprocessed input, normalization modes, alpha schemes, interlacing,
+high-order power modes, and both shot-noise branches.
+
+The development sandbox permits single-rank MPI but blocks the sockets needed
+for multi-rank execution. Multi-rank behavior is implemented using pmesh and MPI
+collectives but has not been validated in that sandbox; run the second command
+on the target cluster before production use.

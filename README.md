@@ -149,6 +149,31 @@ The tests compare periodic power to an independent NumPy FFT, check precision,
 HDF5/tile equivalence, normalization, invalid inputs, and bispectrum tracer and
 output modes.
 
+## Density-split clustering
+
+Add `density_split` to a normal configuration to measure quantile auto/cross
+power multipoles or ordered Sugiyama bispectra. Box catalogue and density-field
+inputs share uniform mesh queries. Survey catalogues use random-catalogue
+queries and the existing survey estimators. Defaults are five quantiles and
+Gaussian smoothing of radius 10 in `boxsize` units.
+
+```python
+config["density_split"] = {
+    "nquantiles": 5, "smoothing_radius": 10.,
+    "measurements": [["Q", "data_a"], ["Q", "Q"]],  # pk
+}
+# For bk_sugi, specify three ordered legs instead:
+# config["density_split"]["measurements"] = [
+#     ["Q", "data_a", "data_a"], ["Q", "Q", "data_a"], ["Q", "Q", "Q"]
+# ]
+result = run_stats(config)
+```
+
+Survey cross measurements require `normalization_scheme="mixed-mesh"`.
+[Definitions, step-by-step implementation, survey random-pool treatment,
+examples, and validation](docs/density_split.md) explain the estimator choices
+and the distinction between box and survey queries.
+
 ## Upstream functionality
 
 CosmoNPC is a Python/MPI code for mesh-based measurements of large-scale structure statistics in box-like and survey-like geometries.

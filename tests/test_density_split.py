@@ -209,5 +209,5 @@ class DensitySplitTests(unittest.TestCase):
                             {'unknown':1},{'mask':np.full(SIGNAL.shape,.5)}]:
                 with self.assertRaises((ValueError,TypeError)):
                     run_stats(configuration(tmp,density_split=options))
-            with self.assertRaisesRegex(ValueError,'survey'):
+            with self.assertRaisesRegex(ValueError,'[Ss]urvey'):
                 run_stats(configuration(tmp,geometry='survey-like'))
