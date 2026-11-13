@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from pmesh import ParticleMesh
 from mpi4py import MPI
-from cosmonpc.wavelet import calculate_scattering, scattering_options, scattering_plan
+from cosmonpc.wavelet import calculate_scattering, scattering_options, scattering_plan, solid_harmonic
 
 COMM = MPI.COMM_WORLD
 
@@ -56,6 +56,35 @@ def mesh(a, precision='double'):
 
 
 class WaveletCoreTests(unittest.TestCase):
+    def test_cartesian_recurrence_against_spherical_harmonics(self):
+        from scipy import special
+        k=np.array([[0.,0.,0.],[.1,.2,.3],[0.,0.,-.7],[.5,-.8,.9]])
+        radius=np.linalg.norm(k,axis=1)
+        polar=np.arccos(np.divide(k[:,2],radius,out=np.zeros_like(radius),where=radius!=0))
+        azimuth=np.arctan2(k[:,1],k[:,0])
+        for ell in range(1,9):
+            for m in range(-ell,ell+1):
+                y=(special.sph_harm_y(ell,m,polar,azimuth) if hasattr(special,'sph_harm_y') else
+                   special.sph_harm(m,ell,azimuth,polar))
+                norm=(1/(2*np.pi*np.sqrt(ell+.5)*special.factorial2(ell+1)) if ell%2==0 else
+                      1/(2**((ell+3)/2)*np.sqrt(np.pi*(2*ell+1))*special.factorial((ell+1)/2)))
+                expected=y*radius**ell*np.exp(-radius**2/2)*(2*np.pi)**1.5*(-1j)**ell*norm
+                np.testing.assert_allclose(solid_harmonic(k.T,[1,1,1],1.,ell,m),expected,rtol=3e-13,atol=1e-16)
+
+    def test_degree_four_addition_theorem_plane_wave(self):
+        n=16
+        g=np.indices((n,)*3)
+        a=np.cos(2*np.pi*(g[0]+g[1]+g[2])/n)
+        sigma=1.1
+        r2=3*(sigma*2*np.pi/n)**2
+        result=calculate_scattering(mesh(a),dict(J=1,L=4,q=[2.],sigma=sigma,max_order=1))
+        # Analytic sum_m |Y_lm|^2=(2l+1)/(4pi), and known radial
+        # normalization constants, independently simplified for l=0..4.
+        constants=[1.,np.pi/8,1/9,np.pi/128,1/225]
+        for (j,ell),value in zip(result['index1'],result['S1'][:,0]):
+            expected=.5*constants[ell]*(r2*4**j)**ell*np.exp(-r2*4**j)
+            self.assertAlmostEqual(value,expected,places=13)
+
     def test_m_resolved_oracle_ratios_and_amplitude_cancellation(self):
         a=np.random.default_rng(891).normal(size=(8,)*3)
         mask=np.indices(a.shape)[2]%3!=0
@@ -76,6 +105,9 @@ class WaveletCoreTests(unittest.TestCase):
                         expected2.append(moment(w))
         np.testing.assert_allclose(result['M1'],expected1,rtol=1e-13)
         np.testing.assert_allclose(result['M2'],expected2,rtol=1e-13)
+        single=calculate_scattering(mesh(a,'single'),settings,mask[f.slices])
+        np.testing.assert_allclose(single['M1'],expected1,rtol=4e-6)
+        np.testing.assert_allclose(single['M2'],expected2,rtol=4e-6)
         for key in ['R1','R2']:
             np.testing.assert_allclose(result[key],scaled[key],rtol=1e-13)
         m=result['M1'][-3:]

@@ -5,9 +5,10 @@ instead of sums; same ell at both layers, j2 > j1. Full complex FFTs retain
 the complex wavelet responses, including the Nyquist planes.
 """
 import time
+import math
+from functools import lru_cache
 import numpy as np
 from mpi4py import MPI
-from scipy import special
 
 
 def scattering_options(options, nmesh):
@@ -43,6 +44,23 @@ def scattering_options(options, nmesh):
     return options
 
 
+@lru_cache(maxsize=256)
+def _harmonic_constants(ell, m):
+    # Regular solid harmonics by normalized Cartesian recurrence. Cache scalars
+    # only, never arrays depending on box size, decomposition, or scale.
+    a = abs(m)
+    base = (-1)**a * math.exp(.5*(math.log((2*a+1)/(4*np.pi))+math.lgamma(2*a+1))
+                              - a*math.log(2)-math.lgamma(a+1))
+    steps = [(degree, math.sqrt((4*degree**2-1)/(degree**2-a*a)),
+              math.sqrt((2*degree+1)*((degree-1)**2-a*a)/((2*degree-3)*(degree**2-a*a))))
+             for degree in range(a+2,ell+1)]
+    if ell % 2 == 0:
+        norm = 1/(2*np.pi*math.sqrt(ell+.5)*math.prod(range(ell+1,0,-2)))
+    else:
+        norm = 1/(2**((ell+3)/2)*math.sqrt(np.pi*(2*ell+1))*math.factorial((ell+1)//2))
+    return base, steps, (2*np.pi)**1.5 * (-1j)**ell * norm
+
+
 def solid_harmonic(k, cellsize, sigma, ell, m):
     """One slab of the Fourier multiplier, evaluated in float64/complex128.
 
@@ -54,18 +72,18 @@ def solid_harmonic(k, cellsize, sigma, ell, m):
     gaussian = np.exp(-.5*r2)
     if ell == 0:
         return gaussian
-    radius = np.sqrt(r2)
-    polar = np.arccos(np.clip(np.divide(z, radius, out=np.zeros_like(radius), where=radius != 0), -1, 1))
-    azimuth = np.arctan2(y, x)
-    if hasattr(special, 'sph_harm_y'):
-        harmonic = special.sph_harm_y(ell, m, polar, azimuth)
-    else:  # scipy 1.8..1.14
-        harmonic = special.sph_harm(m, ell, azimuth, polar)
-    if ell % 2 == 0:
-        norm = 1 / (2*np.pi*np.sqrt(ell+.5)*special.factorial2(ell+1))
+    base, steps, norm = _harmonic_constants(ell,m)
+    a = abs(m)
+    previous = base*(x+1j*y)**a
+    if ell == a:
+        harmonic = previous
     else:
-        norm = 1 / (2**((ell+3)/2)*np.sqrt(np.pi*(2*ell+1))*special.factorial((ell+1)/2))
-    return harmonic * (radius**ell * gaussian) * ((2*np.pi)**1.5 * (-1j)**ell * norm)
+        harmonic = math.sqrt(2*a+3)*z*previous
+        for _, c1, c2 in steps:
+            previous, harmonic = harmonic, c1*z*harmonic-c2*r2*previous
+    if m < 0:
+        harmonic = (-1)**a*np.conj(harmonic)
+    return harmonic * gaussian * norm
 
 
 def scattering_plan(options):
