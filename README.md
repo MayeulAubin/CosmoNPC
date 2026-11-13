@@ -70,17 +70,43 @@ Raw densities must be nonnegative and have a positive global mean.
 
 Tile order and filenames do not affect placement. Tile metadata must describe
 a complete, nonoverlapping, grid-aligned covering of the configured box, with
-the same cell spacing and cosmic time. Missing/overlapping tiles are errors;
-partial volumes are not silently zero padded. Buffered overlapping tiles must
+the same cell spacing and cosmic time. Missing/overlapping tiles are errors
+by default. Buffered overlapping tiles must
 be cropped before use. `field_origin` defaults to `[0., 0., 0.]`; set it to the
 corner of a box with another origin. No regridding or periodic wrapping of
 out-of-box tiles is performed.
+
+For an incomplete tile set, explicitly enable zero filling:
+
+```python
+config["fields"]["data_a"] = {
+    "tiles": ["tile1_density_field.h5", "tile3_density_field.h5"],
+    "kind": "density",
+    "missing_tiles": "zero",  # default: "error"
+}
+```
+
+Uncovered cells and nonexistent listed files are treated as outside the mask.
+Missing cells remain exactly zero in the **final overdensity mesh** (rather
+than becoming delta = -1 when normalizing raw density). Raw density is
+normalized using the mean over all covered cells, or an explicit positive
+`mean_density`. Mean subtraction is also restricted to covered cells so it
+does not fill the mask. For `kind="delta"`, the supplied overdensity is centered
+only over covered cells. Present zero-density cells still count as covered.
+An empty tile list, or a list whose files are all missing, produces a zero
+field. Overlap, corrupt files, incompatible metadata, and invalid values still
+raise errors. Output `field_metadata` records `covered_cells`,
+`coverage_fraction`, and the missing-tile policy for each tracer.
+
+These are masked box-estimator statistics; zero filling does not implement a
+survey selection function, window deconvolution, or survey normalization.
 
 For MPI, provide the same global NumPy array on every rank, or identical HDF5
 path descriptors on every rank. HDF5 files must be visible to all ranks. Each
 rank reads only the HDF5 regions intersecting its local pmesh domain; the full
 field is not assembled on rank zero. Tile density normalization uses the
-whole box, never an independent mean for each tile. Each tracer's DC component
+whole box (covered cells only for incomplete tiles), never an independent
+mean for each tile. Each tracer's DC component
 is removed. `mean_density` can supply an external positive reference density
 for raw density inputs; the remaining DC component is still removed.
 

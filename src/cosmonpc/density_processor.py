@@ -23,10 +23,11 @@ def _descriptor(source):
 
 
 def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
-    """Read one rectangular domain, validating complete, nonoverlapping coverage.
+    """Read one rectangular domain, validating nonoverlapping tile coverage.
 
     Returns raw values and the descriptor. Normalization is performed globally
-    by get_density_meshes, never independently for individual tiles.
+    by get_density_meshes, never independently for individual tiles. Coverage is
+    complete unless a tile descriptor explicitly selects missing_tiles='zero'.
     """
     spec = _descriptor(source)
     if sum(key in spec for key in ("array", "path", "tiles")) != 1:
@@ -34,6 +35,11 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
     kind = spec.get("kind", "density" if "tiles" in spec else "delta")
     if kind not in ("delta", "density"):
         raise ValueError("Field kind must be 'delta' or 'density'")
+    missing_tiles = spec.get("missing_tiles", "error")
+    if missing_tiles not in ("error", "zero"):
+        raise ValueError("missing_tiles must be 'error' or 'zero'")
+    if "missing_tiles" in spec and "tiles" not in spec:
+        raise ValueError("missing_tiles is only supported for tile inputs")
     nmesh = np.asarray(nmesh, dtype=int)
     boxsize, origin = np.asarray(boxsize, float), np.asarray(origin, float)
     if origin.shape != (3,) or not np.all(np.isfinite(origin)):
@@ -41,7 +47,8 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
     start = np.array([s.start for s in slices])
     stop = np.array([s.stop for s in slices])
     shape = tuple(stop - start)
-    out = np.empty(shape, dtype=dtype)
+    out = np.zeros(shape, dtype=dtype)
+    coverage = None
     if "array" in spec:
         data = spec["array"]
         if not isinstance(data, np.ndarray) or data.shape != tuple(nmesh):
@@ -51,13 +58,19 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
         out[...] = data[slices]
     else:
         paths = spec["tiles"] if "tiles" in spec else [spec["path"]]
-        if isinstance(paths, (str, os.PathLike)) or not paths:
+        if isinstance(paths, (str, os.PathLike)) or (not paths and missing_tiles == "error"):
             raise ValueError("tiles must be a nonempty list of HDF5 paths")
         covered = np.zeros(shape, dtype=bool)
         cellsize = boxsize / nmesh
         times = []
         for path in paths:
-            with h5py.File(path, "r") as hf:
+            try:
+                hf = h5py.File(path, "r")
+            except FileNotFoundError:
+                if missing_tiles == "zero":
+                    continue
+                raise
+            with hf:
                 def meta(key):
                     return hf.attrs["/info/scalars/" + key]
 
@@ -94,13 +107,15 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
                 covered[target] = True
         if times and not np.allclose(times, times[0], rtol=1e-10, atol=0):
             raise ValueError("Density tiles have inconsistent cosmic times")
-        if not np.all(covered):
+        if missing_tiles == "zero":
+            coverage = covered
+        elif not np.all(covered):
             raise ValueError("Density fields do not completely cover the configured mesh")
     if not np.all(np.isfinite(out)):
         raise ValueError("Density field contains nonfinite values")
     if kind == "density" and np.any(out < 0):
         raise ValueError("Density values must be nonnegative; use kind='delta' for overdensity")
-    return out, {**spec, "kind": kind}
+    return out, {**spec, "kind": kind, "_coverage": coverage}
 
 
 def get_density_meshes(fields, correlation_mode, nmesh, boxsize, comm, statistic,
@@ -125,17 +140,31 @@ def get_density_meshes(fields, correlation_mode, nmesh, boxsize, comm, statistic
         errors = comm.allgather(error)
         if any(errors):
             raise ValueError("Cannot load density field: " + next(e for e in errors if e))
-        mean = comm.allreduce(float(np.sum(values, dtype=np.float64)), op=MPI.SUM) / cells
+        coverage = spec["_coverage"]
+        covered_cells = (comm.allreduce(int(np.count_nonzero(coverage)), op=MPI.SUM)
+                         if coverage is not None else cells)
+        mean = (comm.allreduce(float(np.sum(values, dtype=np.float64)), op=MPI.SUM)
+                / max(covered_cells, 1))
+        reference = None
         if spec["kind"] == "density":
-            reference = float(spec.get("mean_density", mean))
-            if not np.isfinite(reference) or reference <= 0:
+            reference = float(spec.get("mean_density", mean)) if covered_cells or "mean_density" in spec else None
+            if reference is not None and (not np.isfinite(reference) or reference <= 0):
                 raise ValueError("mean_density must be finite and positive")
-            values /= reference
-            values -= 1
-        # Always remove the DC component. For pk this is also explicitly cleared
-        # in Fourier space, but bk must see a zero-mean third leg as well.
-        delta_mean = comm.allreduce(float(np.sum(values, dtype=np.float64)), op=MPI.SUM) / cells
-        values -= delta_mean
+            if reference is not None:
+                values /= reference
+                if coverage is None:
+                    values -= 1
+                else:
+                    values[coverage] -= 1
+        # Center covered cells only, preserving zeros outside incomplete tiles.
+        # For pk the DC mode is also cleared in Fourier space, but bk must see
+        # a zero-mean third leg as well.
+        delta_mean = (comm.allreduce(float(np.sum(values, dtype=np.float64)), op=MPI.SUM)
+                      / max(covered_cells, 1))
+        if coverage is None:
+            values -= delta_mean
+        else:
+            values[coverage] -= delta_mean
         # Keep delta itself to preserve small-amplitude fields in single
         # precision (adding and later subtracting one would lose those modes).
         mesh[...] = values
@@ -147,6 +176,8 @@ def get_density_meshes(fields, correlation_mode, nmesh, boxsize, comm, statistic
             "kind": spec["kind"], "input_mean": mean,
             "mean_density": reference if spec["kind"] == "density" else None,
             "removed_delta_mean": delta_mean,
+            "missing_tiles": spec.get("missing_tiles", "error"),
+            "covered_cells": covered_cells, "coverage_fraction": covered_cells / cells,
         }
     if statistic == "pk":
         return attrs, meshes["a"], meshes.get("b")

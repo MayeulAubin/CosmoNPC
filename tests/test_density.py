@@ -103,6 +103,53 @@ class DensityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Overlapping'):
                 get_density_meshes({'data_a': {'tiles':paths+paths}}, 'auto', [N]*3, [L]*3, COMM, 'pk')
 
+    def test_incomplete_tiles_preserve_zero_mask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'tile.h5'
+            absent = Path(tmp)/'missing.h5'
+            for kind in ['density', 'delta']:
+                data = 4*(1+DELTA[:8]) if kind == 'density' else DELTA[:8]
+                write_field(path, data)
+                expected = np.zeros_like(DELTA)
+                present = data/data.mean()-1 if kind == 'density' else data.copy()
+                present -= present.mean()
+                expected[:8] = present
+                for precision, tol in [('double', 1e-14), ('single', 2e-7)]:
+                    source = {'tiles':[path, absent], 'kind':kind, 'missing_tiles':'zero'}
+                    attrs, mesh, _ = get_density_meshes({'data_a':source}, 'auto', [N]*3,
+                                                       [L]*3, COMM, 'pk', precision=precision)
+                    np.testing.assert_allclose(mesh.value.real, expected[mesh.slices], atol=tol)
+                    np.testing.assert_array_equal(mesh.value.imag, 0)
+                    missing = np.indices(mesh.shape)[0] + mesh.start[0] >= 8
+                    np.testing.assert_array_equal(mesh.value[missing], 0)
+                    self.assertEqual(attrs['field_metadata']['a']['coverage_fraction'], .5)
+                    # The actual estimator must agree with an explicitly masked array.
+                    measured = measure(config(fields={'data_a':source}, precision=precision))
+                    oracle = measure(config(fields={'data_a':expected}, precision=precision))
+                    if COMM.rank == 0:
+                        np.testing.assert_allclose(measured['P0'], oracle['P0'], rtol=2e-6, atol=1e-9)
+                # Explicit reference density controls scaling without filling the mask.
+                if kind == 'density':
+                    source = {'tiles':[path], 'missing_tiles':'zero', 'mean_density':8.}
+                    attrs, mesh, _ = get_density_meshes({'data_a':source}, 'auto', [N]*3, [L]*3, COMM, 'pk')
+                    expected[:8] = (data-data.mean())/8.
+                    np.testing.assert_allclose(mesh.value.real, expected[mesh.slices], atol=1e-14)
+                    self.assertEqual(attrs['field_metadata']['a']['mean_density'], 8.)
+            with self.assertRaisesRegex(ValueError, 'Overlapping'):
+                get_density_meshes({'data_a':{'tiles':[path,path], 'missing_tiles':'zero'}},
+                                   'auto', [N]*3, [L]*3, COMM, 'pk')
+            # Empty selections, including ranks wholly outside the mask, stay zero.
+            for paths in [[], [absent]]:
+                attrs, mesh, _ = get_density_meshes({'data_a':{'tiles':paths, 'missing_tiles':'zero'}},
+                                                   'auto', [N]*3, [L]*3, COMM, 'pk')
+                np.testing.assert_array_equal(mesh.value, 0)
+                self.assertEqual(attrs['field_metadata']['a']['coverage_fraction'], 0.)
+            for bad in [{'tiles':[path], 'missing_tiles':'ignore'},
+                        {'array':DELTA, 'missing_tiles':'zero'},
+                        {'tiles':[absent]}]:
+                with self.assertRaises(ValueError):
+                    get_density_meshes({'data_a':bad}, 'auto', [N]*3, [L]*3, COMM, 'pk')
+
     def test_invalid_inputs(self):
         slices = (slice(0,N),)*3
         for data in [np.full((N,)*3, np.nan), np.ones((N,)*3, dtype=complex), np.ones((3,3,3))]:
