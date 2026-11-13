@@ -23,6 +23,11 @@ and an [editable field configuration](src/cosmonpc/config/wst_fields.py) describ
 how to run it. Survey coefficients retain window and noise effects; use matching
 mocks. Multi-rank cluster scaling has not been measured in the development sandbox.
 
+[Local benchmarks](docs/benchmark.md) record measured CPU seconds and peak RSS
+for Pl, Bl and WST from 16³ to 512³, with explicit workload and thread settings.
+The scripts in `benchmarks/` reproduce the measurements and export scientific
+coefficient plots and CPU/memory scaling figures.
+
 ## Precision
 
 Set `config["precision"] = "single"` for `complex64` meshes, FFTs, and

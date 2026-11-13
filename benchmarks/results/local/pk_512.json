@@ -1,0 +1,80 @@
+{
+  "estimator": "pk",
+  "nmesh": 512,
+  "ranks": 1,
+  "precision": "single",
+  "thread_limit": 8,
+  "numexpr_threads": 8,
+  "fft_backend": "production pmesh/PFFT; no FFT threading control",
+  "memory_limit_gib": 12.0,
+  "python": "3.11.18",
+  "numpy": "1.26.4",
+  "status": "ok",
+  "boxsize": 1024.0,
+  "input": "analytic_nonGaussian_periodic_v1",
+  "cpu_scope": "estimator calls only; all process threads, summed over ranks",
+  "rss_scope": "process lifetime; maximum over ranks; Linux KiB",
+  "settings": {
+    "poles": [
+      0,
+      2,
+      4
+    ],
+    "k_min": 0.005,
+    "k_max": 0.02,
+    "k_bins": 6,
+    "angu_config": [
+      0,
+      0,
+      0
+    ],
+    "data_vector_mode": "full",
+    "block_size": 1
+  },
+  "cpu_seconds": 12.489760166000002,
+  "wall_seconds_max_rank": 11.378832667999632,
+  "coefficients": {
+    "k_eff": [
+      0.006135923322290182,
+      0.008677505888044834,
+      0.011332351847418718,
+      0.013720341958105564,
+      0.01580492469171683,
+      0.01885031329260932
+    ],
+    "k_num": [
+      6.0,
+      12.0,
+      14.0,
+      24.0,
+      36.0,
+      54.0
+    ],
+    "P0": [
+      5.661044549798433e-12,
+      5480556.333333333,
+      124046.51785714286,
+      10859968.666666666,
+      28109.112847222223,
+      4757.427951388889
+    ],
+    "P2": [
+      2.1215069569481387e-11,
+      6850694.191666866,
+      -0.018484371613062982,
+      -25052770.32145182,
+      -26394.61683517813,
+      3964.5244743442095
+    ],
+    "P4": [
+      4.563178619399589e-11,
+      -20038285.01249985,
+      -434162.7980590847,
+      29417220.873413086,
+      -41242.93643585814,
+      -18302.88199367422
+    ]
+  },
+  "max_abs_imaginary": 0.0,
+  "peak_rss_kib": 5427748
+}

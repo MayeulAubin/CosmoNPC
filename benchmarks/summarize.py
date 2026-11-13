@@ -38,7 +38,7 @@ Under MPI this is the maximum rank RSS, not the sum across ranks. RSS is not
 virtual address space, allocated-array byte counts or an incremental baseline.
 
 NumExpr, OpenMP and BLAS thread limits are explicitly set to **8** before imports.
-NumExpr reports eight active threads. The installed pmesh/PFFT extension has
+NumExpr reports eight configured threads. The installed pmesh/PFFT extension has
 statically linked FFT code and exposes no FFT threading controls: the FFTs here
 remain single-threaded per rank. WST does not use NumExpr for its wavelet kernels.
 Independent cases below 256 cubed run concurrently (two processes), so the suite
@@ -48,7 +48,7 @@ throughout; timings include competition with other local activity. FFTW threadin
 requires explicit initialization and threaded plans; setting `OMP_NUM_THREADS`
 alone does not enable it ([FFTW documentation](https://fftw.org/doc/Usage-of-Multi_002dthreaded-FFTW.html)).
 
-Each worker has a **12 GiB virtual-address-space ceiling** to avoid exhausting
+Workers default to a **12 GiB virtual-address-space ceiling** to avoid exhausting
 the interactive workstation; this is independent of the measured peak RSS.
 A failed/limited case is explicitly labeled and is never filled with an
 extrapolated timing. Partial CPU/RSS measurements, when available, remain in
@@ -68,8 +68,8 @@ Coordinates x,y,z here are in units of box length. Input generation uses local
 planes and does not construct a global field on root. There is no assignment
 compensation, particle shot-noise subtraction, survey window or density split in
 these baseline workloads. They measure the underlying estimators; input readers,
-catalogue painting and quantile construction have additional costs. No hard
-Nyquist boundary is approached: even at 16 cubed, 2*kmax=0.04 is below Nyquist.
+catalogue painting and quantile construction have additional costs. Every grid
+satisfies the bispectrum Nyquist bound: at 16 cubed, 2*kmax=0.04 is below Nyquist.
 
 - **Pl:** auto power multipoles 0, 2, 4, fixed z LOS, six linear bins from
   k=0.005 to 0.02 h/Mpc.
@@ -90,10 +90,38 @@ Nyquist boundary is approached: even at 16 cubed, 2*kmax=0.04 is below Nyquist.
             cpu=f"{d['cpu_seconds']:.3f}" if ok else '—'
             rss=f"{d['peak_rss_kib']/1024:.1f}" if ok else '—'
             status='Completed' if ok else d.get('status','Not run')
+            if ok and d.get('memory_limit_gib',12)!=12:
+                status+=f" ({d['memory_limit_gib']:g} GiB limit)"
             if not ok and 'error' in d:
                 status+=': '+d['error'].replace('|','/')[:180]
             text+=f'| {n}³ | {cpu} | {rss} | {status} |\n'
         text+='\n'
+    attempt_path=a.results/'attempts/bk_512_limit12.json'
+    if attempt_path.exists():
+        attempt=json.loads(attempt_path.read_text())
+        text+='The first 512-cubed Bl attempt reached the 12 GiB address-space ceiling '
+        text+=f"after {attempt.get('partial_cpu_seconds',0):.2f} CPU seconds and "
+        text+=f"{attempt.get('peak_rss_kib',0)/1024:.1f} MiB peak RSS. "
+        text+='It was retried alone with a 16 GiB ceiling; the table reports that attempt. '
+        text+='The failed record is retained in `benchmarks/results/local/attempts/bk_512_limit12.json`.\n\n'
+    text+='## Numerical checks\n\n'
+    import numpy as np
+    for estimator,keys,label in [('pk',['P0','P2','P4'],'Pl'),('bk',['B_sugi'],'Bl')]:
+        reference=rows.get((estimator,16),{})
+        if reference.get('status')!='ok':
+            continue
+        errors=[]
+        for (name,n),d in rows.items():
+            if name!=estimator or d.get('status')!='ok' or n==16:
+                continue
+            for key in keys:
+                v=np.asarray(d['coefficients'][key]); r=np.asarray(reference['coefficients'][key])
+                errors.append(float(np.max(abs(v-r))/max(float(np.max(abs(r))),1e-30)))
+        if errors:
+            text+=f'{label}: coefficients across completed grids agree with the 16-cubed reference to '
+            text+=f'{max(errors):.2g} in maximum absolute difference divided by the maximum reference amplitude. '
+    text+='The analytic field is band limited and the fixed k range has the same modes at every resolution. '
+    text+='WST is not expected to be grid independent here because its physical wavelet radii change with cell size.\n\n'
     text+='''## Reproducing and extending
 
 Run from the repository with the NPC Python environment (or an equivalent
@@ -101,6 +129,9 @@ installation of the project dependencies):
 
 ```bash
 PYTHONPATH=src python benchmarks/run_suite.py --threads 8 --jobs 2
+# Reproduce the larger memory ceiling used for the last bispectrum case:
+PYTHONPATH=src python benchmarks/run_suite.py --estimators bk --grids 512 \\
+    --threads 8 --memory-gib 16 --force
 python benchmarks/summarize.py --plots "$HOME/Téléchargements/CosmoCM"
 ```
 
@@ -163,7 +194,7 @@ their own results directory; do not overwrite this local measurement campaign.
                 ax.set_xticks([16,32,64,128,256,512],labels=['16³','32³','64³','128³','256³','512³'])
                 ax.set(xlabel='Grid',ylabel=label)
                 ax.grid(alpha=.2,which='both')
-            fig.suptitle(f'CosmoCM {title}: measured local benchmark\nSingle MPI rank; 8 NumExpr threads; production PFFT; complex64')
+            fig.suptitle(f'CosmoCM {title}: measured local benchmark\n1 rank; NumExpr limit 8; single-threaded PFFT FFTs; complex64')
             for suffix in ['png','pdf']:
                 fig.savefig(a.plots/f'{title}_benchmark.{suffix}',dpi=180)
             plt.close(fig)

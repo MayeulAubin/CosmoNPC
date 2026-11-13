@@ -1,0 +1,38 @@
+{
+  "estimator": "bk",
+  "nmesh": 512,
+  "ranks": 1,
+  "precision": "single",
+  "thread_limit": 8,
+  "numexpr_threads": 8,
+  "fft_backend": "production pmesh/PFFT; no FFT threading control",
+  "memory_limit_gib": 12.0,
+  "python": "3.11.18",
+  "numpy": "1.26.4",
+  "status": "failed",
+  "boxsize": 1024.0,
+  "input": "analytic_nonGaussian_periodic_v1",
+  "cpu_scope": "estimator calls only; all process threads, summed over ranks",
+  "rss_scope": "process lifetime; maximum over ranks; Linux KiB",
+  "settings": {
+    "poles": [
+      0,
+      2,
+      4
+    ],
+    "k_min": 0.005,
+    "k_max": 0.02,
+    "k_bins": 6,
+    "angu_config": [
+      0,
+      0,
+      0
+    ],
+    "data_vector_mode": "full",
+    "block_size": 1
+  },
+  "error": "MemoryError: Unable to allocate 1.00 GiB for an array with shape (512, 512, 512) and data type complex64",
+  "partial_cpu_seconds": 18.881372528999997,
+  "partial_wall_seconds": 18.883305422000376,
+  "peak_rss_kib": 10801612
+}

@@ -30,7 +30,7 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.colors import SymLogNorm
-    from matplotlib.ticker import NullLocator, FuncFormatter, SymmetricalLogLocator
+    from matplotlib.ticker import NullLocator, FuncFormatter
     logging.disable(logging.CRITICAL)
     if MPI.COMM_WORLD.size!=1:
         raise ValueError('This plotting fixture is intentionally serial')
@@ -117,9 +117,10 @@ def main():
     axes[2].set(xlabel=r'$k\ [h\,\mathrm{Mpc}^{-1}]$',ylabel=r'$B(k,k)\ [h^{-6}\mathrm{Mpc}^{6}]$',title='Diagonal configurations',yscale='symlog')
     threshold=max(float(np.max(abs(b0))),float(np.max(abs(b2))))*1e-3
     axes[2].set_yscale('symlog',linthresh=threshold)
-    locator=SymmetricalLogLocator(base=10,linthresh=threshold)
-    locator.set_params(numticks=7)
-    axes[2].yaxis.set_major_locator(locator)
+    ymax=max(float(np.max(abs(b0))),float(np.max(abs(b2))))
+    ticks=10.**np.arange(np.ceil(np.log10(threshold)),np.floor(np.log10(ymax))+1)
+    axes[2].set_yticks(np.r_[-ticks[::-1],0,ticks])
+    axes[2].yaxis.set_major_formatter(FuncFormatter(lambda value,_:'0' if value==0 else f'{value:.0e}'))
     axes[2].legend()
     axes[2].grid(alpha=.2)
     fig.suptitle(f'CosmoCM Sugiyama bispectrum — same {n}³ matter overdensity; fixed Cartesian z LOS\nContinuous density: no Poisson subtraction')
