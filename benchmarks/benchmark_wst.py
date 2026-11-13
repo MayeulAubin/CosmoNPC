@@ -6,6 +6,7 @@ Use separate processes for each setting: ru_maxrss is a process lifetime peak.
 import argparse
 import json
 import resource
+import time
 import numpy as np
 from mpi4py import MPI
 from pmesh import ParticleMesh
@@ -44,9 +45,12 @@ def main():
     mask=((x-.5)**2+(y-.5)**2+(z-.5)**2 < .4**2) if args.survey else None
     baseline=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     times=[]
+    cpu_times=[]
     for _ in range(args.repeat):
         comm.Barrier()
+        cpu_start=time.process_time()
         result=calculate_scattering(field,options,mask)
+        cpu_times.append(comm.allreduce(time.process_time()-cpu_start,op=MPI.SUM))
         times.append(result['elapsed_seconds_max_rank'])
     peak=comm.allreduce(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,op=MPI.MAX)
     baseline=comm.allreduce(baseline,op=MPI.MAX)
@@ -63,6 +67,7 @@ def main():
                 global_cells=cells,explicit_core_array_bytes_max_rank=explicit_bytes,
                 peak_rss_kib_max_rank=peak,baseline_rss_kib_max_rank=baseline,
                 seconds_max_rank=times,covered_cells=result['covered_cells'],
+                cpu_seconds_sum_ranks=cpu_times,
                 coefficient_checksum=float(sum(np.sum(result[key]) for key in ['S0','S1','S2'])))
     if comm.rank==0:
         print(json.dumps(report,sort_keys=True))
