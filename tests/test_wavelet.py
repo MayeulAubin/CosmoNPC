@@ -56,6 +56,34 @@ def mesh(a, precision='double'):
 
 
 class WaveletCoreTests(unittest.TestCase):
+    def test_m_resolved_oracle_ratios_and_amplitude_cancellation(self):
+        a=np.random.default_rng(891).normal(size=(8,)*3)
+        mask=np.indices(a.shape)[2]%3!=0
+        settings=dict(J=1,L=2,q=[.8,2.],sigma=.8,m_resolved=True)
+        f=mesh(a)
+        result=calculate_scattering(f,settings,mask[f.slices])
+        scaled=calculate_scattering(mesh(4*a),settings,mask[f.slices])
+        expected1,expected2=[],[]
+        def moment(v):
+            return [(abs(v[mask])**q).mean() for q in settings['q']]
+        for ell in range(3):
+            for j1 in range(2):
+                for m in range(ell+1):
+                    v=abs(np.fft.ifftn(np.fft.fftn(a*mask)*filters(8,.8*2**j1,ell)[m+ell]))*mask
+                    expected1.append(moment(v))
+                    if j1==0:
+                        w=abs(np.fft.ifftn(np.fft.fftn(v)*filters(8,1.6,ell)[m+ell]))*mask
+                        expected2.append(moment(w))
+        np.testing.assert_allclose(result['M1'],expected1,rtol=1e-13)
+        np.testing.assert_allclose(result['M2'],expected2,rtol=1e-13)
+        for key in ['R1','R2']:
+            np.testing.assert_allclose(result[key],scaled[key],rtol=1e-13)
+        m=result['M1'][-3:]
+        np.testing.assert_allclose(result['R1'][-1],np.mean(m[1:]/m[:-1],axis=0),rtol=1e-14)
+        zero=calculate_scattering(mesh(np.zeros_like(a)),settings)
+        self.assertTrue(np.isnan(zero['R1']).all())
+        self.assertFalse(zero['ratio_valid1'].any())
+
     def test_numpy_cartesian_oracle_both_precisions_and_mask(self):
         a=np.random.default_rng(123).normal(size=(8,)*3)+.2
         options=scattering_options(dict(J=2,L=2,q=[.5,.8,1.,2.],sigma=.8),a.shape)

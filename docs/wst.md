@@ -92,7 +92,22 @@ For s selected scales and e angular degrees, second order costs
 moment reductions. Full resolution is retained at both layers: there is no
 unvalidated subsampling or nonlinear alias-removal approximation.
 
-Recent work includes [Jiang et al. (2025)](https://arxiv.org/abs/2505.14400),
-which retains individual m responses and introduces mode ratios and high-density
-apodization. Those define different statistics from the baseline rotation norm;
-neither directional ratios nor density remapping is silently applied here.
+## Optional directional coefficients
+
+Set `wst.m_resolved=True` to additionally evaluate the individual-m moments
+and adjacent-mode ratios introduced by
+[Jiang et al. (2025)](https://arxiv.org/abs/2505.14400), equations 4–7.
+`M1(j,l,m,q)=mean(|I*psi(j,l,m)|**q)` and
+`M2(j1,j2,l,m,q)=mean(||I*psi(j1,l,m)|*psi(j2,l,m)|**q)` use
+nonnegative m and the same m and l at both layers. The baseline S1/S2 are also
+returned. These cannot be reconstructed from the rotation norm when q differs
+from 2. R1/R2 average adjacent m ratios for each l>0; undefined ratios are NaN
+with false `ratio_valid1/2` entries. Rows are specified by `index_m1/2` and
+`index_r1/2`. Individual modes and ratios depend on the Cartesian axis orientation;
+they do not implement a spatially varying radial line of sight.
+
+This opt-in traversal adds `sum_l(l+1)*(s+s*(s-1)/2)` inverse FFTs and
+`sum_l(l+1)*(s-1)` forward FFTs at second order, with no additional resident
+mesh. The ratios cancel a global linear amplitude rescaling; this is not a
+guarantee against nonlinear tracer or survey bias. The newer paper's high-density
+apodization is a separate preprocessing choice and is not applied here.

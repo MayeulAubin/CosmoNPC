@@ -4,7 +4,6 @@ Conventions: Kymatio solid-harmonic Fourier normalization; spatial *means*
 instead of sums; same ell at both layers, j2 > j1. Full complex FFTs retain
 the complex wavelet responses, including the Nyquist planes.
 """
-import math
 import time
 import numpy as np
 from mpi4py import MPI
@@ -13,7 +12,7 @@ from scipy import special
 
 def scattering_options(options, nmesh):
     options = dict(options)
-    unknown = options.keys() - {'J', 'L', 'sigma', 'q', 'max_order', 'scales', 'ells', 'mask'}
+    unknown = options.keys() - {'J', 'L', 'sigma', 'q', 'max_order', 'scales', 'ells', 'mask', 'm_resolved'}
     if unknown:
         raise ValueError(f'Unknown wst options: {sorted(unknown)}')
     for key, default in [('J', min(4, int(np.log2(min(nmesh))))), ('L', 4), ('max_order', 2)]:
@@ -39,6 +38,8 @@ def scattering_options(options, nmesh):
     if q.ndim != 1 or q.size == 0 or q.dtype.kind not in 'ifu' or np.any(~np.isfinite(q)) or np.any(q <= 0) or len(set(q)) != len(q):
         raise ValueError('wst.q must contain distinct finite positive powers')
     options['q'] = q.astype(float).tolist()
+    if not isinstance(options.setdefault('m_resolved', False), (bool, np.bool_)):
+        raise ValueError('wst.m_resolved must be boolean')
     return options
 
 
@@ -71,9 +72,11 @@ def scattering_plan(options):
     """Exact FFT counts for the streaming traversal, excluding input painting."""
     s, e = len(options['scales']), len(options['ells'])
     pairs = s*(s-1)//2 if options['max_order'] == 2 else 0
-    return {'forward_ffts': 1 + (e*(s-1) if pairs else 0),
-            'inverse_ffts': sum(2*l+1 for l in options['ells'])*(s+pairs),
+    modes = sum(l+1 for l in options['ells']) if options['m_resolved'] else 0
+    return {'forward_ffts': 1 + ((e+modes)*(s-1) if pairs else 0),
+            'inverse_ffts': (sum(2*l+1 for l in options['ells'])+modes)*(s+pairs),
             'coefficients_per_q': 1 + e*(s+pairs),
+            'm_coefficients_per_q': modes*(s+pairs),
             'filter_cache': 'none', 'mesh_gathers': 0,
             'algorithm': 'full_resolution_streaming', 'decimation': False}
 
@@ -97,8 +100,9 @@ def calculate_scattering(field, options, mask=None):
             mask = mask.astype(bool)
     if np.any(~np.isfinite(field.value)):
         error = 'WST input contains nonfinite values'
-    if any(comm.allgather(error)):
-        raise ValueError(next(e for e in comm.allgather(error) if e))
+    errors = comm.allgather(error)
+    if any(errors):
+        raise ValueError(next(e for e in errors if e))
     count = comm.allreduce(field.size if mask is None else int(mask.sum()), op=MPI.SUM)
     if not count:
         raise ValueError('WST mask has no covered cells')
@@ -130,12 +134,15 @@ def calculate_scattering(field, options, mask=None):
     cellsize = field.pm.BoxSize/field.pm.Nmesh
     accumulator = np.empty(field.shape, dtype=field.value.real.dtype)
 
+    def component(fourier, j, ell, m):
+        for k, source, target in zip(fourier.slabs.x, fourier.slabs, buffer.slabs):
+            np.multiply(source, solid_harmonic(k, cellsize, options['sigma']*2**j, ell, m), out=target)
+        buffer.c2r(out=response)
+
     def modulus(fourier, j, ell):
         accumulator.fill(0)
         for m in range(-ell, ell+1):
-            for k, source, target in zip(fourier.slabs.x, fourier.slabs, buffer.slabs):
-                np.multiply(source, solid_harmonic(k, cellsize, options['sigma']*2**j, ell, m), out=target)
-            buffer.c2r(out=response)
+            component(fourier, j, ell, m)
             for a, r in zip(accumulator, response.value):
                 np.hypot(a, np.abs(r), out=a)
         if mask is not None:
@@ -158,6 +165,54 @@ def calculate_scattering(field, options, mask=None):
                     second.append(moments(modulus(u1_fourier, j2, ell)))
                     index2.append((j1, j2, ell))
                 del u1_fourier
+    extras = {}
+    if options['m_resolved']:
+        m1, m2, mi1, mi2 = [], [], [], []
+        for ell in options['ells']:
+            for ij, j1 in enumerate(options['scales']):
+                for m in range(ell+1):
+                    component(original, j1, ell, m)
+                    np.abs(response.value, out=accumulator)
+                    if mask is not None:
+                        accumulator[~mask] = 0
+                    m1.append(moments(accumulator))
+                    mi1.append((j1, ell, m))
+                    later = options['scales'][ij+1:] if options['max_order']==2 else []
+                    if later:
+                        response[...] = accumulator
+                        u1_fourier = response.r2c()
+                        for j2 in later:
+                            component(u1_fourier,j2,ell,m)
+                            np.abs(response.value,out=accumulator)
+                            if mask is not None:
+                                accumulator[~mask] = 0
+                            m2.append(moments(accumulator))
+                            mi2.append((j1,j2,ell,m))
+                        del u1_fourier
+        def ratios(indices, values):
+            groups = {}
+            for index, value in zip(indices, values):
+                if index[-2] > 0:
+                    groups.setdefault(index[:-1], []).append(value)
+            rows, ratios, valid = [], [], []
+            for index, modes in groups.items():
+                modes = np.asarray(modes)
+                good = np.all(modes[:-1] > 0, axis=0)
+                ratio = np.full(len(q), np.nan)
+                ratio[good] = np.mean(modes[1:,good]/modes[:-1,good], axis=0)
+                rows.append(index)
+                ratios.append(ratio)
+                valid.append(good)
+            return rows, np.asarray(ratios).reshape(-1,len(q)), np.asarray(valid,dtype=bool).reshape(-1,len(q))
+        ri1,r1,valid1 = ratios(mi1,m1)
+        ri2,r2,valid2 = ratios(mi2,m2)
+        extras = {'M1':np.asarray(m1).reshape(-1,len(q)), 'M2':np.asarray(m2).reshape(-1,len(q)),
+                  'index_m1':np.asarray(mi1,dtype=int).reshape(-1,3),
+                  'index_m2':np.asarray(mi2,dtype=int).reshape(-1,4),
+                  'R1':r1, 'R2':r2, 'ratio_valid1':valid1, 'ratio_valid2':valid2,
+                  'index_r1':np.asarray(ri1,dtype=int).reshape(-1,2),
+                  'index_r2':np.asarray(ri2,dtype=int).reshape(-1,3),
+                  'm_convention':'nonnegative_m_same_m_and_ell_at_both_layers'}
     elapsed = comm.allreduce(time.perf_counter()-started, op=MPI.MAX)
     return {'S0': s0, 'S1': np.asarray(first).reshape(-1, len(q)),
             'S2': np.asarray(second).reshape(-1, len(q)),
@@ -166,4 +221,4 @@ def calculate_scattering(field, options, mask=None):
             'q': q, 'averaging': 'mean_over_covered_cells', 'covered_cells': count,
             'wavelet_normalization': 'kymatio_solid_harmonic',
             'mask_policy': 'zero_input_and_each_layer',
-            'plan': scattering_plan(options), 'elapsed_seconds_max_rank': elapsed}
+            'plan': scattering_plan(options), 'elapsed_seconds_max_rank': elapsed, **extras}
