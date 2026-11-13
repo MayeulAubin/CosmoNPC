@@ -14,9 +14,9 @@ from .precision import complex_dtype
 
 def _descriptor(source):
     if isinstance(source, np.ndarray):
-        return {"array": source, "kind": "delta"}
+        return {"array": source, "kind": "overdensity"}
     if isinstance(source, (str, os.PathLike)):
-        return {"path": source, "kind": "delta"}
+        return {"path": source, "kind": "overdensity"}
     if not isinstance(source, dict):
         raise TypeError("A field must be an ndarray, HDF5 path, or field descriptor")
     return source
@@ -32,9 +32,13 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
     spec = _descriptor(source)
     if sum(key in spec for key in ("array", "path", "tiles")) != 1:
         raise ValueError("Specify exactly one of array, path, or tiles")
-    kind = spec.get("kind", "density" if "tiles" in spec else "delta")
-    if kind not in ("delta", "density"):
-        raise ValueError("Field kind must be 'delta' or 'density'")
+    kind = spec.get("kind", "overdensity")
+    # Keep the original names as aliases for existing configurations.
+    kind = {"delta": "overdensity", "density": "counts"}.get(kind, kind)
+    if kind not in ("overdensity", "counts"):
+        raise ValueError("Field kind must be 'overdensity' or 'counts' (aliases: 'delta', 'density')")
+    if kind == "overdensity" and "mean_density" in spec:
+        raise ValueError("mean_density is only supported for counts inputs")
     missing_tiles = spec.get("missing_tiles", "error")
     if missing_tiles not in ("error", "zero"):
         raise ValueError("missing_tiles must be 'error' or 'zero'")
@@ -113,8 +117,8 @@ def read_local_field(source, nmesh, boxsize, origin, slices, dtype):
             raise ValueError("Density fields do not completely cover the configured mesh")
     if not np.all(np.isfinite(out)):
         raise ValueError("Density field contains nonfinite values")
-    if kind == "density" and np.any(out < 0):
-        raise ValueError("Density values must be nonnegative; use kind='delta' for overdensity")
+    if kind == "counts" and np.any(out < 0):
+        raise ValueError("Counts must be nonnegative; use kind='overdensity' for overdensity")
     return out, {**spec, "kind": kind, "_coverage": coverage}
 
 
@@ -146,7 +150,7 @@ def get_density_meshes(fields, correlation_mode, nmesh, boxsize, comm, statistic
         mean = (comm.allreduce(float(np.sum(values, dtype=np.float64)), op=MPI.SUM)
                 / max(covered_cells, 1))
         reference = None
-        if spec["kind"] == "density":
+        if spec["kind"] == "counts":
             reference = float(spec.get("mean_density", mean)) if covered_cells or "mean_density" in spec else None
             if reference is not None and (not np.isfinite(reference) or reference <= 0):
                 raise ValueError("mean_density must be finite and positive")
@@ -156,15 +160,8 @@ def get_density_meshes(fields, correlation_mode, nmesh, boxsize, comm, statistic
                     values -= 1
                 else:
                     values[coverage] -= 1
-        # Center covered cells only, preserving zeros outside incomplete tiles.
-        # For pk the DC mode is also cleared in Fourier space, but bk must see
-        # a zero-mean third leg as well.
-        delta_mean = (comm.allreduce(float(np.sum(values, dtype=np.float64)), op=MPI.SUM)
-                      / max(covered_cells, 1))
-        if coverage is None:
-            values -= delta_mean
-        else:
-            values[coverage] -= delta_mean
+        # Overdensities are supplied in their final convention. In particular,
+        # never center a masked field, or remove a user-supplied DC component.
         # Keep delta itself to preserve small-amplitude fields in single
         # precision (adding and later subtracting one would lose those modes).
         mesh[...] = values
@@ -174,8 +171,8 @@ def get_density_meshes(fields, correlation_mode, nmesh, boxsize, comm, statistic
         attrs[f"N_gal_{label}"] = cells
         attrs["field_metadata"][label] = {
             "kind": spec["kind"], "input_mean": mean,
-            "mean_density": reference if spec["kind"] == "density" else None,
-            "removed_delta_mean": delta_mean,
+            "mean_density": reference,
+            "removed_delta_mean": 0.0,
             "missing_tiles": spec.get("missing_tiles", "error"),
             "covered_cells": covered_cells, "coverage_fraction": covered_cells / cells,
         }

@@ -635,13 +635,10 @@ def calculate_power_spectrum_box(
     else:
         kgrid, knorm = get_kgrid(cfield_a)
 
-    # clear zero-mode in the Fourier space
-    # note that even for cross power spectrum, we only need to clear the zero-mode of cfield_a
-    # cfield_a[knorm == 0.] = 0.
-    # we'd better use a smarter way to handle the zero-mode issue
-    if knorm[0, 0, 0] == 0.0:
-        cfield_a[0, 0, 0] = 0.0 + 0j
-        logging.info(f"Rank {rank}: Zero-mode in Fourier space of cfield_a cleared!")
+    # Catalogue counts require DC removal. Supplied overdensities retain their
+    # DC mode, consistent with passing those values through without centering.
+    if stat_attrs.get("input_type") != "density":
+        cfield_a[knorm == 0.] = 0.0
 
     P_field = np.real(cfield_a[:]) * np.real(cfield_b[:]) + np.imag(
         cfield_a[:]

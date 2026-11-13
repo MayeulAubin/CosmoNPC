@@ -47,19 +47,31 @@ Each `fields["data_a"]` (or `data_b`, `data_c`) accepts:
 ```python
 # Global NumPy overdensity array: delta = rho / mean(rho) - 1.
 source = delta
-source = {"array": delta, "kind": "delta", "name": "matter"}
+source = {"array": delta, "kind": "overdensity", "name": "matter"}
 
 # Simbelmyne scalar Field HDF5, containing overdensity by default.
 source = "density_field.h5"
-source = {"path": "density_field.h5", "kind": "delta"}
+source = {"path": "density_field.h5", "kind": "overdensity"}
 
-# Raw density or cell counts: normalize using the GLOBAL mean.
-source = {"path": "density_field.h5", "kind": "density"}
-source = {"array": rho, "kind": "density", "mean_density": 2.5}
+# Raw density or cell counts: explicitly request conversion to overdensity.
+source = {"path": "density_field.h5", "kind": "counts"}
+source = {"array": rho, "kind": "counts", "mean_density": 2.5}
 
-# sCOLA postprocessed tiles contain raw density: default kind is density.
+# Tiles default to overdensity, just like arrays and full HDF5 fields.
 source = {"tiles": ["tile1_density_field.h5", "tile2_density_field.h5"]}
+# If the tile postprocessor wrote raw counts, declare them explicitly.
+source = {"tiles": ["tile1_density_field.h5", "tile2_density_field.h5"], "kind": "counts"}
 ```
+
+Every field defaults to `kind="overdensity"`: its values are used unchanged
+apart from the selected precision. No normalization or mean subtraction is
+performed, even for incomplete tiles or a nonzero input mean. To convert raw
+cell counts (or raw density), explicitly set `kind="counts"`: covered cells
+become `counts / mean_counts - 1`. `mean_counts` is computed across all covered
+cells, or supplied using `mean_density`. No additional centering is performed,
+so an explicit reference mean is respected. For compatibility, `"delta"` is an
+alias for `"overdensity"` and `"density"` is an alias for `"counts"`.
+`mean_density` is only valid with counts inputs.
 
 HDF5 reads use `/scalars/field` and root attributes `/info/scalars/N0..N2`,
 `L0..L2`, `corner0..corner2`, `rank` and optional `time`. Scalar ranks 0 and 1
@@ -81,18 +93,17 @@ For an incomplete tile set, explicitly enable zero filling:
 ```python
 config["fields"]["data_a"] = {
     "tiles": ["tile1_density_field.h5", "tile3_density_field.h5"],
-    "kind": "density",
+    "kind": "overdensity",  # default; use "counts" for raw cell counts
     "missing_tiles": "zero",  # default: "error"
 }
 ```
 
 Uncovered cells and nonexistent listed files are treated as outside the mask.
-Missing cells remain exactly zero in the **final overdensity mesh** (rather
-than becoming delta = -1 when normalizing raw density). Raw density is
-normalized using the mean over all covered cells, or an explicit positive
-`mean_density`. Mean subtraction is also restricted to covered cells so it
-does not fill the mask. For `kind="delta"`, the supplied overdensity is centered
-only over covered cells. Present zero-density cells still count as covered.
+Missing cells remain exactly zero in the **final overdensity mesh**. Supplied
+overdensity values are preserved without mean subtraction. Counts inputs are
+converted using the mean over all covered cells, or an explicit positive
+`mean_density`; uncovered cells remain zero rather than becoming delta = -1.
+Present zero-count cells still count as covered.
 An empty tile list, or a list whose files are all missing, produces a zero
 field. Overlap, corrupt files, incompatible metadata, and invalid values still
 raise errors. Output `field_metadata` records `covered_cells`,
@@ -104,11 +115,10 @@ survey selection function, window deconvolution, or survey normalization.
 For MPI, provide the same global NumPy array on every rank, or identical HDF5
 path descriptors on every rank. HDF5 files must be visible to all ranks. Each
 rank reads only the HDF5 regions intersecting its local pmesh domain; the full
-field is not assembled on rank zero. Tile density normalization uses the
+field is not assembled on rank zero. Counts normalization uses the
 whole box (covered cells only for incomplete tiles), never an independent
-mean for each tile. Each tracer's DC component
-is removed. `mean_density` can supply an external positive reference density
-for raw density inputs; the remaining DC component is still removed.
+mean for each tile. Overdensities are not normalized. Their supplied DC mode
+is retained, including in power-spectrum measurements whose bins contain k=0.
 
 Continuous fields have zero Poisson shot-noise subtraction. Catalogue RSD and
 interlacing do not apply: set `apply_rsd=False` if adapting a catalogue config;

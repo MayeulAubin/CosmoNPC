@@ -94,7 +94,7 @@ class DensityTests(unittest.TestCase):
                 write_field(path, rho[i*8:(i+1)*8], corner=(i*L/2,0,0))
                 paths.append(path)
             reference = get_density_meshes({'data_a': DELTA}, 'auto', [N]*3, [L]*3, COMM, 'pk')[1]
-            for source in [ {'path': tmp/'full.h5', 'kind': 'density'}, {'tiles': paths[::-1]}, {'array':rho,'kind':'density'} ]:
+            for source in [ {'path': tmp/'full.h5', 'kind': 'density'}, {'tiles': paths[::-1], 'kind':'counts'}, {'array':rho,'kind':'density'} ]:
                 mesh = get_density_meshes({'data_a':source}, 'auto', [N]*3, [L]*3, COMM, 'pk')[1]
                 np.testing.assert_allclose(mesh.value, reference.value, atol=1e-14)
             # Ensure a tile subset cannot masquerade as a full periodic box.
@@ -112,7 +112,6 @@ class DensityTests(unittest.TestCase):
                 write_field(path, data)
                 expected = np.zeros_like(DELTA)
                 present = data/data.mean()-1 if kind == 'density' else data.copy()
-                present -= present.mean()
                 expected[:8] = present
                 for precision, tol in [('double', 1e-14), ('single', 2e-7)]:
                     source = {'tiles':[path, absent], 'kind':kind, 'missing_tiles':'zero'}
@@ -130,9 +129,9 @@ class DensityTests(unittest.TestCase):
                         np.testing.assert_allclose(measured['P0'], oracle['P0'], rtol=2e-6, atol=1e-9)
                 # Explicit reference density controls scaling without filling the mask.
                 if kind == 'density':
-                    source = {'tiles':[path], 'missing_tiles':'zero', 'mean_density':8.}
+                    source = {'tiles':[path], 'kind':'counts', 'missing_tiles':'zero', 'mean_density':8.}
                     attrs, mesh, _ = get_density_meshes({'data_a':source}, 'auto', [N]*3, [L]*3, COMM, 'pk')
-                    expected[:8] = (data-data.mean())/8.
+                    expected[:8] = data/8.-1.
                     np.testing.assert_allclose(mesh.value.real, expected[mesh.slices], atol=1e-14)
                     self.assertEqual(attrs['field_metadata']['a']['mean_density'], 8.)
             with self.assertRaisesRegex(ValueError, 'Overlapping'):
@@ -149,6 +148,43 @@ class DensityTests(unittest.TestCase):
                         {'tiles':[absent]}]:
                 with self.assertRaises(ValueError):
                     get_density_meshes({'data_a':bad}, 'auto', [N]*3, [L]*3, COMM, 'pk')
+
+    def test_overdensity_defaults_preserve_values_and_dc(self):
+        signal = DELTA + .7  # A nonzero mean must survive all input formats.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'field.h5'
+            write_field(path, signal)
+            for precision in ['single', 'double']:
+                for source in [signal, {'array':signal}, path, {'path':path},
+                               {'tiles':[path]}, {'array':signal, 'kind':'delta'},
+                               {'array':signal, 'kind':'overdensity'}]:
+                    attrs, mesh, _ = get_density_meshes({'data_a':source}, 'auto', [N]*3,
+                                                       [L]*3, COMM, 'pk', precision=precision)
+                    np.testing.assert_array_equal(mesh.value.real, signal[mesh.slices].astype(mesh.value.real.dtype))
+                    self.assertEqual(attrs['field_metadata']['a']['kind'], 'overdensity')
+                    self.assertIsNone(attrs['field_metadata']['a']['mean_density'])
+                    self.assertEqual(attrs['field_metadata']['a']['removed_delta_mean'], 0.)
+            write_field(path, signal[:8])
+            source = {'tiles':[path], 'missing_tiles':'zero'}
+            _, mesh, _ = get_density_meshes({'data_a':source}, 'auto', [N]*3, [L]*3, COMM, 'pk')
+            expected = np.zeros_like(signal)
+            expected[:8] = signal[:8]
+            np.testing.assert_array_equal(mesh.value.real, expected[mesh.slices])
+            for kind in ['counts', 'density']:
+                _, mesh, _ = get_density_meshes({'data_a':{'array':signal,'kind':kind}},
+                                               'auto', [N]*3, [L]*3, COMM, 'pk')
+                np.testing.assert_allclose(mesh.value.real, (signal/signal.mean()-1)[mesh.slices], atol=1e-14)
+            with self.assertRaisesRegex(ValueError, 'only supported for counts'):
+                get_density_meshes({'data_a':{'array':signal,'mean_density':1.}},
+                                   'auto', [N]*3, [L]*3, COMM, 'pk')
+        result = measure(config(fields={'data_a':signal}, poles=[0], k_min=0.))
+        if COMM.rank == 0:
+            k = 2*np.pi*np.fft.fftfreq(N, d=L/N)
+            norm = np.sqrt(sum(x*x for x in np.meshgrid(k,k,k,indexing='ij')))
+            power = L**3*abs(np.fft.fftn(signal)/N**3)**2
+            edges = np.linspace(0., .19, 3)
+            expected = [power[(norm>=a)&(norm<b)].mean() for a,b in zip(edges[:-1],edges[1:])]
+            np.testing.assert_allclose(result['P0'], expected, rtol=1e-12, atol=1e-10)
 
     def test_invalid_inputs(self):
         slices = (slice(0,N),)*3
@@ -188,14 +224,15 @@ class DensityTests(unittest.TestCase):
             np.testing.assert_allclose(zero['B_sugi'], 0, atol=1e-20)
 
     def test_direct_bispectrum_and_small_amplitude(self):
-        c = config(statistic='bk_sugi', angu_config=[0,0,0], tracer_type='aaa', data_vector_mode='full')
+        signal = DELTA + .4
+        c = config(fields={'data_a':signal}, statistic='bk_sugi', angu_config=[0,0,0], tracer_type='aaa', data_vector_mode='full')
         result = measure(c)
         k = 2*np.pi*np.fft.fftfreq(N, d=L/N)
         norm = np.sqrt(sum(x*x for x in np.meshgrid(k,k,k,indexing='ij')))
         edges = np.linspace(c['k_min'], c['k_max'], c['k_bins']+1)
         masks = [(norm>=a)&(norm<b) for a,b in zip(edges[:-1],edges[1:])]
-        filtered = [np.fft.ifftn(np.fft.fftn(DELTA)*mask).real for mask in masks]
-        expected = np.array([[L**6*np.mean(a*b*DELTA)/(masks[i].sum()*masks[j].sum())
+        filtered = [np.fft.ifftn(np.fft.fftn(signal)*mask).real for mask in masks]
+        expected = np.array([[L**6*np.mean(a*b*signal)/(masks[i].sum()*masks[j].sum())
                               for j,b in enumerate(filtered)] for i,a in enumerate(filtered)])
         np.testing.assert_allclose(result['B_sugi'], expected, rtol=1e-12, atol=1e-8)
         # Linear initial-condition delta may be much smaller than float32 epsilon.
