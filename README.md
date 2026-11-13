@@ -3,9 +3,25 @@
 # CosmoCM
 
 CosmoCM is a fork of [CosmoNPC](https://github.com/YunchenXie/CosmoNPC),
-adding selectable mesh/FFT precision and periodic density-field inputs.
+adding selectable mesh/FFT precision, density-field inputs, density-split
+clustering, and a distributed wavelet scattering transform.
 The Python import remains `cosmonpc` for compatibility with existing scripts.
 The original MIT license and authorship are retained.
+
+## Wavelet scattering transform
+
+Set `statistic="wst"` with the existing catalogue or density inputs and
+`wst={"J": 4, "L": 4, "sigma": .8, "q": [.8], "max_order": 2}`.
+This measures solid-harmonic S0, S1 and S2 with distributed pmesh FFTs,
+streaming wavelet components instead of storing a filter bank. Both precisions,
+incomplete tiles and survey selection are supported. Optional `m_resolved=True`
+adds directional moments and mode ratios. Selected `scales` and `ells` reduce
+runtime. WST does not need `k_min`, `k_max`, `k_bins` or `poles`.
+
+[Conventions, survey treatment, memory/runtime costs and validation](docs/wst.md)
+and an [editable field configuration](src/cosmonpc/config/wst_fields.py) describe
+how to run it. Survey coefficients retain window and noise effects; use matching
+mocks. Multi-rank cluster scaling has not been measured in the development sandbox.
 
 ## Precision
 

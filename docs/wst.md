@@ -1,7 +1,8 @@
 # Wavelet scattering transform
 
-Implementation proceeds in separately validated commits: distributed mathematical
-core; input and survey adapters; performance tools and user documentation.
+Implementation is split into separately validated commits: distributed mathematical
+core; input and survey adapters; optional directional statistics; optimized filter
+generation; performance tools and user documentation.
 
 The baseline follows [Valogiannis & Dvorkin (2022)](https://arxiv.org/abs/2204.13717),
 equations 6–7 and Appendix A. Write
@@ -36,6 +37,12 @@ The full complex Fourier grid is intentional: solid harmonics have complex
 responses. Keeping just a real inverse transform would produce incorrect moments.
 All m components are evaluated, including negative m, so no continuum conjugacy
 assumption is made on discrete Nyquist planes.
+
+Wavelet multipliers are evaluated with a normalized Cartesian regular-solid-
+harmonic recurrence. This avoids per-cell polar/azimuthal angles and repeated
+special-function evaluation. Only scalar normalization/recurrence constants are
+cached; all grid-dependent arrays remain slab-sized. Checks against spherical
+harmonics cover every m through l=8, including poles and the origin.
 
 ## Inputs and survey conventions
 
@@ -84,6 +91,124 @@ Root receives the output dictionary and saves `output_dir/wst.npy`. Each entry
 in `measurements` contains S0 `(nq,)`, S1 `(nfirst,nq)`, S2 `(nsecond,nq)`, and
 `index1=(j1,l)` / `index2=(j1,j2,l)` rows identifying the coefficients. Powers,
 wavelet convention, coverage, input normalization and FFT plan are recorded.
+
+## Running and scaling
+
+```python
+from copy import deepcopy
+from cosmonpc import run_stats
+from cosmonpc.config.wst_fields import CONFIG
+
+config = deepcopy(CONFIG)  # edit paths and grid geometry first
+result = run_stats(config)  # dictionary on root, None on other ranks
+```
+
+Every rank must call `run_stats` with the same numerical settings. As with the
+existing estimators, in-memory catalogues contain **rank-local rows**; global
+density arrays and array masks are replicated caller-owned inputs. Prefer HDF5
+fields/tiles for large meshes: those read only the local real-space rectangle.
+All FFT work uses pmesh's distributed decomposition, and only small coefficient
+vectors / scalar metadata are reduced. Files are written by root only.
+
+At second order the core retains at most five complex local mesh arrays
+(including the input) plus one real accumulator. With s>1 this is approximately
+`44*Nlocal` bytes in single or `88*Nlocal` in double precision; first order uses
+four complex arrays plus the accumulator. Add masks, slab temporaries, pmesh FFT
+workspace/plans, source catalogue/array storage, and interpreter/library memory.
+These figures are explicit array counts, **not** a total RSS prediction. The
+array count is independent of J/L and of the number of output coefficients.
+The optional directional traversal reuses those buffers. Processing additional
+sources sequentially also keeps the same resident working mesh count.
+
+Useful runtime controls, without changing any selected coefficient:
+
+- Use `precision='single'` after checking accuracy for your fields.
+- Select `wst.scales=[0,2,4]` and/or `wst.ells=[0,1,2]`. Retained paths are
+  computed at the original mesh resolution, with their actual j labels.
+- Use `max_order=1` when only first order is needed.
+- Compute several q values in one run; they share all convolutions.
+- Keep `m_resolved=False` unless directional coefficients are needed.
+
+Full-resolution second order is considerably more expensive than a power
+spectrum: the paper's baseline needs 396 FFTs per source before input preparation.
+No downsampling is used after the nonlinear modulus. Even a Gaussian wavelet
+does not make a nonlinear modulus strictly band limited; coarse-grid acceleration
+would require a separately measured alias/error budget. Gaussian wavelets also
+have finite-grid discretization and Nyquist sensitivity at the finest scales.
+Test mesh and sigma convergence rather than interpreting sigma as a hard k cut.
+
+Measure your MPI layouts with the included benchmark (run from the repository):
+
+```bash
+PYTHONPATH=src mpiexec -n 4 python benchmarks/benchmark_wst.py \
+    --nmesh 256 --J 3 --L 3 --precision single --repeat 2
+PYTHONPATH=src mpiexec -n 4 python benchmarks/benchmark_wst.py \
+    --nmesh 256 --J 3 --L 3 --precision single --survey
+```
+
+Run each rank/size setting in a fresh process. The script generates its input
+locally with rank-independent physical values and reports FFT counts, coefficient
+checksum, maximum-rank elapsed times and peak RSS (Linux KiB). It performs no
+global mesh gather. It times the core, excluding reads, painting and output.
+Library/MPI diagnostics can accompany the JSON record on some installations.
+Use equal grid sizes for strong scaling; compare checksums as well as timings.
+For weak scaling grow the number of cells with ranks; global coefficients need
+not remain equal because the physical input also changes with grid size.
+
+Run small-grid independent-oracle tests across decompositions:
+
+```bash
+PYTHONPATH=src mpiexec -n 2 python -m unittest discover -s tests -p 'test_wavelet*.py' -v
+PYTHONPATH=src mpiexec -n 4 python -m unittest discover -s tests -p 'test_wavelet*.py' -v
+```
+
+These test fixtures deliberately use tiny replicated NumPy reference fields;
+the production estimator never constructs such a reference or gathers a mesh.
+Actual strong/weak scaling remains to be measured on an MPI-enabled machine.
+The development sandbox rejects PMIx sockets before workers start, so a
+single-rank MPI run cannot validate those claims.
+
+## Validation recorded during implementation
+
+The existing 31 tests and 12 WST tests cover independent NumPy FFT calculations,
+low-degree Cartesian filters, degree-four plane-wave addition-theorem checks,
+spherical-harmonic checks through degree eight, amplitude and translation
+identities, both precisions, masked propagation through both layers, optional
+directional moments/ratios, input immutability, counts/catalogue equivalence,
+HDF5 full fields and incomplete tiles, survey masks/randoms, FKP normalization,
+multiple independent sources, invalid settings and collective output errors.
+
+A separate local check used the real `t2_b32_final_density_sCOLA.h5` Simbelmynë
+Field (256 cubed, float32, explicit counts, box 250, origin -125). For J=L=0,
+q=2, single precision, S0=33.7228683644 matched a direct counts-overdensity
+moment. S1=10.8271396409 matched an independent SciPy real-FFT Parseval calculation
+10.8271423767 to relative error 2.6e-7. This validates a real full Field;
+postprocessed tile WST tests use synthetic schema-compatible files, not a real
+Silmarilli survey tile collection. Installed Kymatio was unavailable locally;
+normalization checks use the documented filter formulas rather than claiming
+an executed package-to-package comparison.
+
+Representative **single-rank** core benchmarks, complex64, q=.8:
+
+| Grid | J, L | Footprint | Elapsed seconds | Peak process RSS |
+| --- | --- | --- | --- | --- |
+| 64 cubed | 2, 2 | whole box | 4.21, 3.90 | 184.1 MiB |
+| 128 cubed | 2, 2 | whole box | 33.25, 37.22 | 262.6 MiB |
+| 64 cubed | 4, 4 | spherical mask | 43.97 | 184.8 MiB |
+
+RSS includes interpreter/library and pmesh allocations. The extra scales/degrees
+increase runtime substantially while the working array count stays fixed.
+These development-process timings are indicative, not dedicated-machine scaling
+measurements. The earlier spherical-coordinate filter implementation took
+6.54/6.87 seconds on the 64-cubed J=L=2 case; the Cartesian recurrence preserved
+the coefficient checksum exactly in these runs.
+
+For scale planning, a 4096-cubed single-precision second-order core has about
+2.75 TiB of explicit global working arrays, distributed across ranks; on 1024
+balanced ranks that is about 2.75 GiB per rank **before** FFT workspaces and input
+storage. This is an array-size calculation, not a measured run or a memory limit.
+Measure rank-local peak RSS, filesystem behavior and communication costs on the
+target cluster before selecting a production configuration.
 
 For s selected scales and e angular degrees, second order costs
 `1 + e*(s-1)` forward FFTs and
