@@ -342,6 +342,9 @@ def run_task(statistic, correlation_mode, geometry, catalogs, **kwargs):
 
 def run_stats(config):
     comm = MPI.COMM_WORLD
+    if "density_split" in config:
+        from .density_split import run_density_split
+        return run_density_split(config, comm)
     # check the configuration and create output directory
     config = dict(config)
     validate_config(config)
