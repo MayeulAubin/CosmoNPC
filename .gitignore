@@ -176,3 +176,9 @@ cython_debug/
 .DS_Store
 .DS_Store
 /results/
+
+# Generated WST slice figures and data
+/visualizations/wst/wst_density_slices.pdf
+/visualizations/wst/wst_density_slices.png
+/visualizations/wst/wst_coefficients.json
+/visualizations/wst/wst_slices.npz

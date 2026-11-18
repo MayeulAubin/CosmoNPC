@@ -28,6 +28,11 @@ for Pl, Bl and WST from 16³ to 512³, with explicit workload and thread setting
 The scripts in `benchmarks/` reproduce the measurements and export scientific
 coefficient plots and CPU/memory scaling figures.
 
+## Standard comparison plots
+
+The [clustering comparison plotting guide](docs/clustering_comparison_plots.md)
+records the standard figure set, ratio panels, and both WST layouts.
+
 ## Precision
 
 Set `config["precision"] = "single"` for `complex64` meshes, FFTs, and
